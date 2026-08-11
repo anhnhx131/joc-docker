@@ -1,192 +1,197 @@
-# Bắt đầu với `jocv` — hướng dẫn từng bước
+# Getting started with `jocv` — step by step
 
-File này là hướng dẫn thực hành, cầm tay chỉ việc, để chạy `jocv` trên
-**bất kỳ máy Linux nào bạn quản lý** (EC2, VPS, on-prem, máy nhà...). Nội
-dung dưới đây không phụ thuộc vào nhà cung cấp hạ tầng cụ thể nào — dùng
-EC2 hay không không quan trọng, chỉ cần một máy Linux SSH được vào.
+This is a hands-on, copy-pasteable walkthrough for running `jocv` on
+**any Linux machine you control** (EC2, a VPS, on-prem, your own server —
+it doesn't matter). Nothing below is tied to a specific cloud provider;
+you just need a Linux box you can SSH into.
 
-Muốn hiểu kiến trúc/tham chiếu guide gốc thì xem [README.md](README.md);
-muốn hiểu cấu trúc `networks/` thì xem [networks/README.md](networks/README.md).
+For the architecture / guide-fidelity reference, see [README.md](README.md).
+For the `networks/` layout, see [networks/README.md](networks/README.md).
 
-Hướng dẫn này tập trung vào **`ROLE=validator`** (Option 2 — đường đã được
-guide gốc xác thực đầy đủ). Nếu bạn muốn thử `ROLE=el-cl`/`all`, đọc mục
-["Option 3 caveat"](README.md#option-3-caveat-el-cl-roles) trong README
-trước — phần đó chưa được JOC/JBF xác nhận.
+This walkthrough focuses on **`ROLE=validator`** (guide Option 2 — the
+path fully verified against the official guide). If you want to try
+`ROLE=el-cl`/`all`, read the
+["Option 3 caveat"](README.md#option-3-caveat-el-cl-roles) section in the
+README first — that part is not yet confirmed with JOC/JBF.
 
-## 0. Chuẩn bị trước khi bắt đầu
+## 0. Before you start
 
-- [ ] Một máy Linux (Ubuntu/Debian được hỗ trợ tốt nhất; Amazon Linux/RHEL-
-      family cũng chạy được nhưng ít được kiểm chứng hơn — xem `jocv install`
-      bên dưới) mà bạn SSH vào được và có quyền `sudo`.
-- [ ] Đã có **receiver withdrawal address** (Step 1-1 trong guide gốc — địa
-      chỉ ví do JBF/admin cấp).
-- [ ] Đã join JOC PoSA network trên BCCloud (Step 1-2).
-- [ ] Có chỗ ghi mnemonic offline (giấy + bút, hoặc tương tự). **Không**
-      copy-paste mnemonic vào đâu khác ngoài màn hình terminal lúc đó.
-- [ ] Máy chỉ cần mở SSH (22) ở firewall/security group — `ROLE=validator`
-      không nhận kết nối inbound nào khác, chỉ gọi ra ngoài tới Consensus
-      HTTP API trên BCCloud.
-- [ ] Ghi lại **public IP** của máy này — cần điền vào ô "Source" khi mở
-      Consensus HTTP API trên BCCloud (Step 2-5 trong guide gốc).
+- [ ] A Linux machine (Ubuntu/Debian is best supported; Amazon Linux/
+      RHEL-family also works but is less battle-tested — see
+      `jocv install` below) that you can SSH into with `sudo` access.
+- [ ] Your **receiver withdrawal address** (guide Step 1-1 — the address
+      JBF/admin issued you).
+- [ ] You've joined the JOC PoSA network on BCCloud (Step 1-2).
+- [ ] A private, offline way to record a mnemonic phrase (pen and paper,
+      or similar). **Never** paste the mnemonic anywhere else.
+- [ ] The machine only needs SSH (22) open in its firewall/security
+      group — `ROLE=validator` accepts no inbound connections at all, it
+      only calls out to the Consensus HTTP API on BCCloud.
+- [ ] Note this machine's **public IP** — you'll need it for the
+      "Source" field when opening the Consensus HTTP API on BCCloud
+      (guide Step 2-5).
 
-## 1. Lấy code về máy
+## 1. Get the code
 
 ```bash
 git clone git@github.com:anhnhx131/joc-docker.git
 cd joc-docker
 ```
 
-(Nếu máy chưa có SSH key add vào GitHub, dùng URL https thay thế:
-`git clone https://github.com/anhnhx131/joc-docker.git`.)
+(If this machine doesn't have an SSH key registered with GitHub, use the
+HTTPS URL instead: `git clone https://github.com/anhnhx131/joc-docker.git`.)
 
-## 2. Cài Docker
+## 2. Install Docker
 
 ```bash
 ./jocv install
 ```
 
-Lệnh này:
-- Kiểm tra Docker đã có chưa — nếu có rồi thì báo và dừng, không làm gì
-  thêm (an toàn để chạy lại nhiều lần).
-- Nếu chưa có: in ra **toàn bộ** các lệnh `sudo` sẽ chạy, hỏi xác nhận một
-  lần, rồi mới thực thi (theo đúng các bước chính thức từ
-  [docs.docker.com](https://docs.docker.com/engine/install/), không dùng
-  kiểu `curl | sh` mù mờ).
-- Thêm user hiện tại vào group `docker` để chạy không cần `sudo`.
+This command:
+- Checks whether Docker is already installed — if so, it says so and
+  exits, doing nothing else (safe to run repeatedly).
+- If not: prints **every** `sudo` command it's about to run, asks for
+  confirmation once, then executes them — following Docker's official
+  documented steps ([docs.docker.com](https://docs.docker.com/engine/install/)),
+  not an opaque `curl | sh` script.
+- Adds your current user to the `docker` group so you don't need `sudo`
+  for every docker command.
 
-Nếu vừa được thêm vào group `docker`, **logout SSH rồi login lại** (hoặc
-chạy `newgrp docker`) trước khi tiếp tục — group mới chỉ có hiệu lực ở
-phiên đăng nhập mới.
+If you were just added to the `docker` group, **log out of SSH and back
+in** (or run `newgrp docker`) before continuing — group membership only
+applies to new login sessions.
 
-Kiểm tra lại:
+Verify:
 
 ```bash
 docker --version
 docker compose version
 ```
 
-> `jocv install` chỉ cài Docker — không tinh chỉnh OS (swappiness, NTP...),
-> không cài thêm gói nào khác. Nếu distro của bạn không được hỗ trợ, lệnh
-> sẽ báo rõ và trỏ tới hướng dẫn cài Docker chính thức để bạn tự làm.
+> `jocv install` only installs Docker — it doesn't tune the OS
+> (swappiness, NTP, etc.) and doesn't install anything else. If your
+> distro isn't supported, it says so clearly and points you to Docker's
+> official install guide instead.
 
-## 3. Đặt file config mạng (Step 2-1 trong guide gốc)
+## 3. Place the network config files (guide Step 2-1)
 
-`jocv` không tự tải được `config.yaml`/`deposit_contract_block.txt` vì
-trang JOC là trang HTML, không phải raw file. Bạn tải tay:
+`jocv` can't auto-download `config.yaml`/`deposit_contract_block.txt` —
+the JOC page is an HTML docs page, not a raw file URL. Get them manually:
 
-1. Mở https://www.japanopenchain.org/vi/docs/developer/connect-joc/mainnet/
-2. Tải `config.yaml` và `deposit_contract_block.txt`.
-3. Đặt cả hai vào `networks/mainnet/cl/` trên máy đang chạy `jocv`:
+1. Open https://www.japanopenchain.org/vi/docs/developer/connect-joc/mainnet/
+2. Download `config.yaml` and `deposit_contract_block.txt`.
+3. Place both in `networks/mainnet/cl/` on the machine running `jocv`:
 
 ```bash
-# ví dụ dùng scp từ máy đã tải file
+# example: scp from the machine you downloaded them on
 scp config.yaml deposit_contract_block.txt \
-  your-user@<ip-may-chay-jocv>:~/joc-docker/networks/mainnet/cl/
+  your-user@<jocv-machine-ip>:~/joc-docker/networks/mainnet/cl/
 ```
 
-Cách khác, sạch hơn về lâu dài: commit 2 file này vào repo `joc-docker`
-của công ty (xem README mục "Updating config via git"), rồi chỉ cần
-`git pull` ở bước này.
+A cleaner long-term option: commit these two files into your team's
+`joc-docker` repo (see the README's "Updating config via git" section),
+so this step becomes just `git pull`.
 
-## 4. Chạy `jocv init`
+## 4. Run `jocv init`
 
 ```bash
 ./jocv init
 ```
 
-Bạn sẽ được hỏi tuần tự — đây là những gì sẽ xảy ra, theo đúng thứ tự:
+You'll be prompted through the following, in order:
 
-1. **`Which network? [mainnet]:`** — Enter để dùng mainnet (mặc định).
-2. **`Which role? [validator]:`** — Enter để dùng `validator` (mặc định,
-   đúng Option 2).
-3. Script kiểm tra `config.yaml`/`deposit_contract_block.txt` đã có ở
-   bước 3 chưa — nếu thiếu sẽ báo lỗi và dừng lại, in lại hướng dẫn.
+1. **`Which network? [mainnet]:`** — press Enter for mainnet (default).
+2. **`Which role? [validator]:`** — press Enter for `validator` (default,
+   guide Option 2).
+3. The script checks that `config.yaml`/`deposit_contract_block.txt` from
+   step 3 above are in place — if missing, it errors out with instructions.
 4. **`Enter the receiver withdrawal address obtained in Step 1-1 (0x...):`**
-   — dán địa chỉ ví JBF/admin đã cấp (Step 1-1). Sai định dạng sẽ bị từ
-   chối, không lo nhập lộn.
-5. Tool tự sinh `password.txt` ngẫu nhiên, `chmod 600`.
-6. Tool chạy lệnh sinh mnemonic (mất vài giây, không cần mạng).
-7. **Mnemonic sẽ được in ra MÀN HÌNH DUY NHẤT MỘT LẦN** — dạng:
+   — paste the address JBF/admin gave you (Step 1-1). Wrong format is
+   rejected immediately, so a typo won't slip through silently.
+5. A random `password.txt` is generated, `chmod 600`.
+6. The mnemonic-generation command runs (a few seconds, no network needed).
+7. **The mnemonic is printed to the screen exactly once**, like this:
    ```
    ================================================================
     MNEMONIC — write this down OFFLINE now. It will only be shown once:
 
-    comic oven rent shock ... (12-24 từ)
+    comic oven rent shock ... (12-24 words)
 
    ================================================================
    ```
-   **Dừng lại, ghi tay ra giấy ngay lúc này.** Đừng chụp màn hình, đừng
-   copy vào file/note/chat nào.
+   **Stop here and write it down on paper right now.** Don't screenshot
+   it, don't copy it into any file/note/chat.
 8. **`Have you securely written down this mnemonic OFFLINE? Type 'yes' to continue:`**
-   — chỉ gõ `yes` sau khi đã ghi xong. Gõ gì khác sẽ dừng lại, không tạo
-   key gì cả (an toàn, không mất gì).
-9. Tool tạo `keystore-xxx.json`, `deposit_data-xxx.json`, xoá mnemonic khỏi
-   bộ nhớ, `clear` màn hình.
-10. Tool import key vào Lighthouse, tạo `.env`, chạy
+   — only type `yes` once you've actually written it down. Anything else
+   aborts safely — no keys are generated, nothing is lost.
+9. The tool creates `keystore-xxx.json` and `deposit_data-xxx.json`,
+   clears the mnemonic from memory, and clears the screen.
+10. The tool imports the key into Lighthouse, writes `.env`, and runs
     `docker compose up -d`.
-11. Cuối cùng in ra đường dẫn `deposit_data-xxx.json` (cần cho Step 3-1 —
-    Launchpad) và cảnh báo bảo mật.
+11. Finally it prints the path to `deposit_data-xxx.json` (needed for
+    Step 3-1 — Launchpad) and a security reminder.
 
-Nếu có gì gõ sai giữa chừng: `jocv init` **an toàn để chạy lại** — nó tự
-phát hiện phần nào đã xong (key đã có, `.env` đã có...) và hỏi trước khi
-ghi đè, không tự xoá gì.
+If something goes wrong partway through, `jocv init` is **safe to
+re-run** — it detects what's already done (existing keys, existing
+`.env`, ...) and asks before overwriting anything; it never deletes on
+its own.
 
-## 5. Việc phải làm tay trên BCCloud (không có trong `jocv`)
+## 5. Manual work on BCCloud (not covered by `jocv`)
 
-Ở giữa lúc này, sang tab khác làm trên [BCCloud](https://app.bccloud.net/)
-(xem chi tiết trong guide gốc, hoặc bảng ở đầu README.md):
+At this point, switch over to [BCCloud](https://app.bccloud.net/) (see
+the original guide, or the table near the top of README.md, for details):
 
-1. **Step 2-3**: Tạo Transaction Cluster (2 relay node, region Tokyo).
-2. **Step 2-4**: Tạo Validator Cluster, thêm **External Validator** node,
-   điền `pubkey` lấy từ `deposit_data-xxx.json` (đường dẫn `jocv init` vừa
-   in ra ở bước 4.11).
-3. **Step 2-5**: Mở Consensus HTTP API trên node đó, giới hạn Source IP =
-   **public IP của máy đang chạy `jocv`** (đã ghi ở bước 0). Ghi lại IP
-   của node BCCloud đó — bạn cần nó ở bước tiếp theo.
+1. **Step 2-3**: Create a Transaction Cluster (2 relay nodes, Tokyo region).
+2. **Step 2-4**: Create a Validator Cluster, add an **External Validator**
+   node, entering the `pubkey` from `deposit_data-xxx.json` (the path
+   `jocv init` printed in step 4.11 above).
+3. **Step 2-5**: Open the Consensus HTTP API on that node, restricted to
+   the **public IP of the machine running `jocv`** (noted in step 0).
+   Note the BCCloud node's IP — you'll need it next.
 
-## 6. Trỏ Validator Client vào BCCloud
+## 6. Point the Validator Client at BCCloud
 
 ```bash
-./jocv beacon set http://<ip-node-bccloud>:3500
+./jocv beacon set http://<bccloud-node-ip>:3500
 ```
 
-Lệnh này cập nhật `.env` và tự `docker compose up -d` lại container.
+This updates `.env` and re-runs `docker compose up -d` automatically.
 
-## 7. Kiểm tra
+## 7. Check status
 
 ```bash
 ./jocv status
 ```
 
-Kỳ vọng thấy container `validator` đang `Up`, log gần nhất không có lỗi
-kết nối. Nếu thấy `Not attesting` lặp lại liên tục hơn 15-20 phút (sau 5-10
-phút khởi động đầu), có vấn đề — xem log chi tiết:
+Expect the `validator` container to be `Up`, with no connection errors in
+recent logs. If `Not attesting` keeps appearing for more than 15-20
+minutes (after the first 5-10 minutes of startup), something's wrong —
+check the detailed logs:
 
 ```bash
 ./jocv logs validator
 ```
 
-## 8. Nộp deposit data (Step 3-1)
+## 8. Submit deposit data (Step 3-1)
 
-Mở Launchpad theo URL JBF cung cấp, upload đúng file
-`data/validator_keys/deposit_data-xxx.json` (đường dẫn đã in ra ở bước 4).
-Sau đó theo dõi trạng thái Active theo Step 3-2 trong guide gốc bằng
-`./jocv status`.
+Open Launchpad at the URL JBF shared with you, and upload
+`data/validator_keys/deposit_data-xxx.json` (path printed in step 4).
+Then track activation status per the guide's Step 3-2 with `./jocv status`.
 
-## Vài lỗi thường gặp
+## Common issues
 
-| Triệu chứng | Nguyên nhân / cách xử lý |
+| Symptom | Cause / fix |
 | --- | --- |
-| `docker: permission denied` sau `jocv install` | Chưa áp dụng group `docker` mới — logout/login lại SSH, hoặc chạy `newgrp docker`. |
-| `jocv install` báo "Unsupported/unrecognized distro" | Distro của bạn chưa được cover — cài Docker theo [hướng dẫn chính thức](https://docs.docker.com/engine/install/) rồi chạy lại `jocv install` (nó sẽ thấy Docker đã có và bỏ qua). |
-| `jocv init` báo thiếu `config.yaml` | Chưa đặt file vào `networks/mainnet/cl/` (Bước 3) — kiểm tra lại tên file, đúng thư mục. |
-| `Invalid address` khi nhập withdrawal address | Phải là `0x` + đúng 40 ký tự hex (42 ký tự tổng). Copy nhầm thiếu/thừa ký tự là lỗi hay gặp nhất. |
-| `docker compose up` báo thiếu image `execution` dù đang dùng `ROLE=validator` | Không nên xảy ra — nếu gặp, báo lại, đây là bug (role `validator` không được đụng tới service `execution`/`beacon`). |
-| Muốn làm lại từ đầu hoàn toàn | Dừng container (`./jocv down`), xoá `data/` và `.env`, chạy lại `./jocv init`. **Chỉ làm việc này nếu chưa nộp deposit data** — nếu đã nộp rồi mà xoá key thì mất khả năng vận hành validator đó. |
+| `docker: permission denied` after `jocv install` | The new `docker` group membership hasn't taken effect yet — log out/in of SSH, or run `newgrp docker`. |
+| `jocv install` says "Unsupported/unrecognized distro" | Your distro isn't covered — install Docker via the [official guide](https://docs.docker.com/engine/install/) yourself, then re-run `jocv install` (it will detect Docker is present and skip). |
+| `jocv init` complains `config.yaml` is missing | You haven't placed the files in `networks/mainnet/cl/` yet (step 3) — double-check filenames and directory. |
+| `Invalid address` when entering the withdrawal address | Must be `0x` + exactly 40 hex characters (42 total). A missing/extra character from a copy-paste is the usual culprit. |
+| `docker compose up` complains about a missing `execution` image while using `ROLE=validator` | Shouldn't happen — if it does, please report it; `ROLE=validator` should never touch the `execution`/`beacon` services. |
+| Want to start completely over | Stop the container (`./jocv down`), delete `data/` and `.env`, re-run `./jocv init`. **Only do this if you haven't submitted deposit data yet** — deleting keys after submission means you lose the ability to operate that validator. |
 
-## Sau khi test xong trên 1 network/role
+## After testing one network/role combination
 
-Đổi `NETWORK` hay `ROLE` sau khi đã `init` **không được hỗ trợ** — key và
-deposit data gắn với 1 network cụ thể. Muốn thử network/role khác, dùng
-một checkout mới (`git clone` lại vào thư mục khác), đừng sửa `.env` của
-bản đang chạy thật.
+Changing `NETWORK` or `ROLE` after `init` is **not supported** — keys and
+deposit data are tied to a specific network. To try a different
+network/role, use a fresh checkout (`git clone` into another directory);
+don't edit the `.env` of a checkout you're actually running.
