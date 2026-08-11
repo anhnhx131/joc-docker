@@ -214,6 +214,17 @@ submitted, `--chain` baked into key derivation) — switching networks with
 the same keys isn't meaningful. Start a fresh checkout for a different
 network or role combination.
 
+### `jocv config`
+
+For an already-initialized node: view current `WITHDRAWAL_ADDRESS` /
+`BEACON_URL`, optionally change them, then offers to apply via
+`docker compose up -d`. Doesn't touch keys, `NETWORK`, or `ROLE` — those
+are fixed at `jocv init` time (see above). For `ROLE=el-cl` it just prints
+current values and tells you to edit `.env` directly for
+execution/consensus settings (not covered by this command yet). For
+`ROLE=all`, `BEACON_URL` is skipped here since it's auto-managed — use
+`jocv beacon set` if you specifically need to override it.
+
 ### `jocv beacon set <url>`
 
 Only for `ROLE=validator` (points the Validator Client at an external
@@ -457,6 +468,7 @@ joc-docker/
 │   ├── install.sh               # install Docker (Engine + compose plugin) if missing
 │   ├── init.sh                   # network/role selection; guide Step 2-1, 2-2, 2-6, 2-7, 2-8;
 │   │                          # + el-cl setup (genesis/JWT) when role needs it
+│   ├── config.sh                # view/edit WITHDRAWAL_ADDRESS/BEACON_URL post-init
 │   ├── beacon-set.sh            # Step 2-7 initial connect / Step 4 endpoint changes
 │   ├── status.sh                 # Step 3-2 monitoring (one-shot, role-aware)
 │   ├── logs.sh                    # follow a service's logs
