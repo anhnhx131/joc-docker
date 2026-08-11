@@ -305,6 +305,23 @@ while awaiting activation (Step 3-2) if a validator is running. `logs`
 asks you to name a service if more than one is active
 (`execution`/`beacon`/`validator`).
 
+### `jocv reset [--data]`
+
+For starting over. Two tiers:
+
+- `jocv reset` — `docker compose down --remove-orphans`. Leaves `data/`
+  and `.env` untouched; bring the node back with `jocv up` (or `jocv init`
+  if `.env` is gone). This is what `jocv init` points you to when it
+  refuses to overwrite an existing, non-empty `data/validator_keys/`.
+- `jocv reset --data` — also **permanently deletes** `data/` (keys,
+  deposit data, execution/consensus chain data) and `.env`. Prints exactly
+  what will be removed, asks you to confirm the deposit is decommissioned
+  or was never submitted, then requires typing `delete` verbatim (a plain
+  `y` isn't enough) before touching anything. No backup is made —
+  `networks/` (public config) is untouched, but everything under `data/`
+  is gone for good. Only run this if you're certain you don't need this
+  validator's keys anymore.
+
 ## Option 3 caveat (`el-cl`/`all` roles)
 
 The official guide's Step 2 only documents `ROLE=validator` (Option 2).
@@ -468,6 +485,7 @@ joc-docker/
 │   ├── status.sh                 # Step 3-2 monitoring (one-shot, role-aware)
 │   ├── logs.sh                    # follow a service's logs
 │   ├── up.sh / down.sh             # docker compose up -d / down wrappers
+│   ├── reset.sh                     # stop+remove containers; --data wipes keys/deposit/.env
 │   ├── update-config.sh             # Step 4 hard fork config updates (per network)
 │   └── update.sh                     # git pull for this CLI + committed network configs
 └── networks/

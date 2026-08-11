@@ -92,8 +92,11 @@ info "Preparing data directory structure..."
 if [[ "$NEEDS_VALIDATOR" == true ]]; then
   if [[ -d "$KEYS_DIR" ]] && [[ -n "$(ls -A "$KEYS_DIR" 2>/dev/null || true)" ]]; then
     warn "$KEYS_DIR already exists and is not empty."
-    confirm "Continue and reuse the existing directory (nothing will be deleted)?" \
-      || die "Aborted by user. Nothing was changed."
+    if ! confirm "Continue and reuse the existing directory (nothing will be deleted)?"; then
+      info "To start over instead: 'jocv reset --data' (permanently deletes"
+      info "keys/deposit data/.env — only if you're sure you don't need them)."
+      die "Aborted by user. Nothing was changed."
+    fi
   fi
   mkdir -p "$KEYS_DIR"
 fi

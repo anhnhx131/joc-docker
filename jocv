@@ -29,6 +29,8 @@ Usage:
                                  any networks/ files your team commits)
   jocv up                       Start/apply whichever service(s) ROLE needs
   jocv down                     Stop them
+  jocv reset [--data]           Stop + remove containers; with --data, also
+                                 PERMANENTLY delete keys/deposit data/.env
   jocv logs [service]           Follow a service's logs (execution|beacon|validator)
 
 Run 'jocv <command>' with no further arguments for command-specific usage.
@@ -76,6 +78,9 @@ case "$CMD" in
     ;;
   down)
     exec "$ROOT_DIR/scripts/down.sh" "$@"
+    ;;
+  reset)
+    exec "$ROOT_DIR/scripts/reset.sh" "$@"
     ;;
   logs)
     exec "$ROOT_DIR/scripts/logs.sh" "$@"

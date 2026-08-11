@@ -77,6 +77,7 @@ Then submit `data/validator_keys/deposit_data-xxx.json` to Launchpad
 - `./jocv update-config <phase>` — apply a hard fork phase config
 - `./jocv update` — pull the latest CLI/config from git
 - `./jocv logs` / `./jocv down` — day-to-day operation
+- `./jocv reset --data` — wipe keys/deposit data/`.env` to start over (irreversible)
 
 Troubleshooting, the full command reference, and the multi-network/role
 model: [README.md](README.md).

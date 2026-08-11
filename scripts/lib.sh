@@ -51,6 +51,16 @@ confirm() {
   esac
 }
 
+# confirm_strict "question" "phrase" -> returns 0 only if the user types
+# the exact phrase back (case-sensitive). For actions with no undo (e.g.
+# deleting key material) where a fat-fingered 'y' shouldn't be enough.
+confirm_strict() {
+  local prompt="$1" phrase="$2"
+  local answer=""
+  read -r -p "$prompt (type '$phrase' to confirm): " answer || true
+  [[ "$answer" == "$phrase" ]]
+}
+
 # --- preflight checks --------------------------------------------------------
 check_docker() {
   command -v docker >/dev/null 2>&1 \
