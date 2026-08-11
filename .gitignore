@@ -1,0 +1,16 @@
+# Generated at runtime — contains the withdrawal address / beacon URL you configured.
+.env
+
+# Contains the validator's private key material (keystore-*.json, password.txt),
+# generated deposit data, and the Lighthouse client's own data directory.
+# This must never be committed.
+data/
+
+.DS_Store
+
+# Note: networks/**/{el,cl} files (genesis.json, config.yaml,
+# deposit_contract_block.txt, bootnodes.txt) are intentionally NOT
+# ignored. They are public network parameters (not secrets), and this
+# repo supports committing them so validators receive updates via
+# `git pull` instead of a manual download every time — see
+# networks/README.md.

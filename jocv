@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# jocv — CLI wrapper for running a JOC node (validator, plain el-cl node,
+# or both) on infrastructure you control, as opposed to the parts done
+# through the BCCloud web UI. See README.md for the full picture.
+set -euo pipefail
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+usage() {
+  cat <<'EOF'
+jocv — JOC node CLI (validator / plain node / both)
+
+Usage:
+  jocv install                  Install Docker (Engine + compose plugin) if missing
+  jocv init                     Set up this node: prompts for NETWORK
+                                 (mainnet|testnet|sandbox) and ROLE
+                                 (validator|el-cl|all), then runs the
+                                 matching guide steps (Step 2 for 'validator')
+  jocv beacon set <url>         Point the Validator Client at an external
+                                 Consensus Client (ROLE=validator only —
+                                 Step 2-7 initial connection / Step 4 changes)
+  jocv status                   Check whichever service(s) ROLE runs (Step 3-2
+                                 for the validator container)
+  jocv update-config <phase>    Apply a new hard fork phase's consensus config
+                                 for the current NETWORK (Step 4)
+  jocv update                   Update this CLI itself via 'git pull' (code +
+                                 any networks/ files your team commits)
+  jocv up                       Start/apply whichever service(s) ROLE needs
+  jocv down                     Stop them
+  jocv logs [service]           Follow a service's logs (execution|beacon|validator)
+
+Run 'jocv <command>' with no further arguments for command-specific usage.
+See README.md for the full walkthrough, the ROLE/NETWORK/CLIENT model,
+prerequisites, and links to the manual BCCloud steps this CLI does NOT
+automate.
+EOF
+}
+
+CMD="${1:-}"
+[[ $# -gt 0 ]] && shift || true
+
+case "$CMD" in
+  install)
+    exec "$ROOT_DIR/scripts/install.sh" "$@"
+    ;;
+  init)
+    exec "$ROOT_DIR/scripts/init.sh" "$@"
+    ;;
+  beacon)
+    SUB="${1:-}"
+    [[ $# -gt 0 ]] && shift || true
+    case "$SUB" in
+      set) exec "$ROOT_DIR/scripts/beacon-set.sh" "$@" ;;
+      *)
+        echo "Usage: jocv beacon set <url>" >&2
+        exit 1
+        ;;
+    esac
+    ;;
+  status)
+    exec "$ROOT_DIR/scripts/status.sh" "$@"
+    ;;
+  update-config)
+    exec "$ROOT_DIR/scripts/update-config.sh" "$@"
+    ;;
+  update)
+    exec "$ROOT_DIR/scripts/update.sh" "$@"
+    ;;
+  up)
+    exec "$ROOT_DIR/scripts/up.sh" "$@"
+    ;;
+  down)
+    exec "$ROOT_DIR/scripts/down.sh" "$@"
+    ;;
+  logs)
+    exec "$ROOT_DIR/scripts/logs.sh" "$@"
+    ;;
+  -h | --help | help | "")
+    usage
+    ;;
+  *)
+    echo "Unknown command: $CMD" >&2
+    usage
+    exit 1
+    ;;
+esac
