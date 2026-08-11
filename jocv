@@ -15,6 +15,9 @@ Usage:
                                  (mainnet|testnet|sandbox) and ROLE
                                  (validator|el-cl|all), then runs the
                                  matching guide steps (Step 2 for 'validator')
+  jocv config                   View/edit settings of an already-initialized
+                                 node (WITHDRAWAL_ADDRESS, BEACON_URL) without
+                                 touching keys — NETWORK/ROLE fixed at init
   jocv beacon set <url>         Point the Validator Client at an external
                                  Consensus Client (ROLE=validator only —
                                  Step 2-7 initial connection / Step 4 changes)
@@ -44,6 +47,9 @@ case "$CMD" in
     ;;
   init)
     exec "$ROOT_DIR/scripts/init.sh" "$@"
+    ;;
+  config)
+    exec "$ROOT_DIR/scripts/config.sh" "$@"
     ;;
   beacon)
     SUB="${1:-}"

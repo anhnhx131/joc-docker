@@ -11,6 +11,7 @@ networks/
 │   └── cl/
 │       ├── config.yaml               # currently-applied consensus config
 │       ├── deposit_contract_block.txt
+│       ├── genesis.ssz               # optional: precomputed genesis state
 │       ├── bootnodes.txt             # CL bootnodes (ENRs), one per line
 │       └── phases/
 │           └── <phase>/config.yaml   # snapshot per Tokyo Hard Fork phase
@@ -34,6 +35,11 @@ bootnodes, fork epochs) — safe to commit to git, unlike `data/` or `.env`.
   ["Updating config via git"](../README.md#updating-config-via-git)).
 - `cl/phases/<phase>/config.yaml` — same, but for a specific Tokyo Hard
   Fork phase (guide Step 4). Used by `jocv update-config <phase>`.
+- `cl/genesis.ssz` — optional precomputed consensus genesis state. Not
+  referenced by any explicit flag: Lighthouse's `--testnet-dir` auto-loads
+  `genesis.ssz` from that directory if present, and since `docker-compose.yml`
+  bind-mounts the whole `networks/<NETWORK>/cl/` directory as the
+  testnet-dir, dropping the file in here is enough — no code changes needed.
 - `el/genesis.json`, `el/bootnodes.txt`, `cl/bootnodes.txt` — **only
   needed if you run your own Execution/Consensus Client** (`ROLE=el-cl` or
   `ROLE=all`, i.e. the guide's Option 3). **The official guide does not
