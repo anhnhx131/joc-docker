@@ -32,7 +32,7 @@ code; treat it as unverified until confirmed with JBF/admin.
 | --- | --- | --- |
 | `ROLE` | `validator` \| `el-cl` \| `all` | Which service(s) run: only the Validator Client (connects to an external Consensus Client, e.g. BCCloud); only Execution+Consensus (a plain node, no validator duties); or all three, self-hosted. |
 | `NETWORK` | `mainnet` \| `testnet` \| `sandbox` | Which JOC network's config/genesis/bootnodes to use — see `networks/<NETWORK>/{el,cl}/` and [networks/README.md](networks/README.md). |
-| `EL_CLIENT` / `CL_CLIENT` | `geth` / `lighthouse` (only options today) | Which client runs each layer. Structured so `nethermind`, `besu`, `prysm`, etc. can be added later without changing this shape — but only `geth`+`lighthouse` are implemented right now; any other value is rejected with a clear "not supported yet" error (`scripts/lib.sh`: `SUPPORTED_EL_CLIENTS` / `SUPPORTED_CL_CLIENTS`). |
+| `EL_CLIENT` / `CL_CLIENT` | `geth` / `lighthouse` (only options today) | Which client runs each layer. Structured so `nethermind`, `besu`, `prysm`, etc. can be added later without changing this shape — but only `geth`+`lighthouse` are implemented right now; any other value is rejected with a clear "not supported yet" error (`jocv`: `SUPPORTED_EL_CLIENTS` / `SUPPORTED_CL_CLIENTS`). |
 
 `ROLE` maps to [docker compose profiles](https://docs.docker.com/compose/how-tos/profiles/)
 via `COMPOSE_PROFILES` in `.env` (docker compose reads this natively):
@@ -378,10 +378,10 @@ guide-verified path.
 
 Please don't run this blind. Before trusting it with a real mnemonic:
 
-1. **Read the scripts.** They're short: `scripts/init.sh` is the one that
-   matters most. The two `docker run ... ethstaker-deposit-cli` blocks are
-   marked `# --- BEGIN/END: verbatim from guide, Step 2-2 ---` so you can
-   diff them character-for-character against the original guide.
+1. **Read the code.** It's one file: `jocv`. `cmd_init()` is the function
+   that matters most. The two `docker run ... ethstaker-deposit-cli` blocks
+   are marked `# --- BEGIN/END: verbatim from guide, Step 2-2 ---` so you
+   can diff them character-for-character against the original guide.
 2. **Test mnemonic generation with no network access.** The guide's own
    command already uses `--ignore_connectivity`, which tells the deposit
    CLI not to check chain connectivity — you can run
@@ -463,6 +463,12 @@ inferred/adapted or added — flagging it explicitly so you can double-check:
   confirmed before running. Scoped to Docker only — no OS tuning, no
   unrelated packages, unlike `ethd install`.
 
+- **Single-file `jocv`** instead of `scripts/*.sh` + `lib.sh`. Purely
+  organizational — same logic, same verbatim-block markers, just one file
+  with one `cmd_<name>()` function per subcommand instead of one process
+  per file. Not from the guide or from eth-docker's exact layout, but
+  deliberately modeled on `ethd`'s single-file shape.
+
 No multi-validator support, no notifications, no client beyond
 `geth`+`lighthouse` — nothing was added beyond what was asked for.
 
@@ -470,24 +476,16 @@ No multi-validator support, no notifications, no client beyond
 
 ```
 joc-docker/
-├── jocv                       # entrypoint, dispatches to scripts/
+├── jocv                       # the whole CLI — one file, ~1200 lines:
+│                              #   1. paths + SUPPORTED_* allow-lists
+│                              #   2. helpers (logging, confirm(), validators,
+│                              #      env/network utilities, check_el_config())
+│                              #   3. one cmd_<name>() function per subcommand
+│                              #      (install, init, config, beacon_set, status,
+│                              #      update_config, update, up, down, reset, logs)
+│                              #   4. usage() + dispatch (case "$1") at the bottom
 ├── docker-compose.yml         # execution / beacon / validator services, profile-gated
 ├── .env.example
-├── scripts/
-│   ├── lib.sh                 # logging, confirm(), check_docker(), validators for
-│   │                          # network/role/client, profiles_for_role(), sha256_of(),
-│   │                          # set_env_var(), read_bootnodes_file(), cleanup trap
-│   ├── install.sh               # install Docker (Engine + compose plugin) if missing
-│   ├── init.sh                   # network/role selection; guide Step 2-1, 2-2, 2-6, 2-7, 2-8;
-│   │                          # + el-cl setup (genesis/JWT) when role needs it
-│   ├── config.sh                # view/edit WITHDRAWAL_ADDRESS/BEACON_URL post-init
-│   ├── beacon-set.sh            # Step 2-7 initial connect / Step 4 endpoint changes
-│   ├── status.sh                 # Step 3-2 monitoring (one-shot, role-aware)
-│   ├── logs.sh                    # follow a service's logs
-│   ├── up.sh / down.sh             # docker compose up -d / down wrappers
-│   ├── reset.sh                     # stop+remove containers; --data wipes keys/deposit/.env
-│   ├── update-config.sh             # Step 4 hard fork config updates (per network)
-│   └── update.sh                     # git pull for this CLI + committed network configs
 └── networks/
     ├── README.md
     └── {mainnet,testnet,sandbox}/
@@ -496,3 +494,10 @@ joc-docker/
             ├── config.yaml / deposit_contract_block.txt / bootnodes.txt
             └── phases/<phase>/config.yaml   # per hard-fork-phase configs (Step 4)
 ```
+
+Why one file instead of `scripts/*.sh`: bash `source` doesn't create real
+scoping — a sourced file's functions/variables land in the same global
+namespace as the caller, so the previous split never bought any actual
+isolation, only extra indirection. One file (same pattern as eth-docker's
+`ethd`) is easier to read top-to-bottom and easier to audit before
+trusting it with a mnemonic.
