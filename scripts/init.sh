@@ -203,14 +203,9 @@ if [[ "$NEEDS_VALIDATOR" == true ]]; then
   fi
   export VALIDATOR_WITHDRAWAL_ADDRESS
 
-  if [[ "$NETWORK" == "mainnet" ]]; then
-    DEPOSIT_CLI_CHAIN="joc"
-  else
-    warn "The guide only specifies --chain=joc, for mainnet. The correct --chain"
-    warn "value for ethstaker-deposit-cli on '$NETWORK' is not documented here."
-    read -r -p "Enter the --chain value for '$NETWORK' (ask JBF/admin if unsure): " DEPOSIT_CLI_CHAIN
-    [[ -n "$DEPOSIT_CLI_CHAIN" ]] || die "A --chain value is required."
-  fi
+  # All three networks (mainnet/testnet/sandbox) share the same
+  # ethstaker-deposit-cli chain config, per the guide's Step 2-2 command —
+  # --chain is hardcoded to "joc" below regardless of NETWORK.
 
   shopt -s nullglob
   existing_keystores=("$KEYS_DIR"/keystore-*.json)
@@ -269,19 +264,18 @@ if [[ "$NEEDS_VALIDATOR" == true ]]; then
       die "Aborted: mnemonic was not confirmed as saved. No keys were generated."
     fi
 
-    info "Running ethstaker-deposit-cli existing-mnemonic (Step 2-2, verbatim command; --chain=$DEPOSIT_CLI_CHAIN)..."
-    # --- BEGIN: adapted from guide, Step 2-2 (only --chain is parameterized
-    #     for non-mainnet networks; mainnet uses the guide's literal "joc") --
+    info "Running ethstaker-deposit-cli existing-mnemonic (Step 2-2, verbatim command)..."
+    # --- BEGIN: verbatim from guide, Step 2-2 -------------------------------
     if [ -n "$MNEMONIC" ]; then
       echo 'Creating validator keys with existing mnemonic..'
 
-      docker run --rm -v "$PWD/validator_keys:/app/validator_keys" gulabs/gu-ethstaker-deposit-cli:v0.0.1-gubuild.0 --non_interactive --ignore_connectivity existing-mnemonic --num_validators=1 --validator_start_index=0 --mnemonic_language=english --chain="$DEPOSIT_CLI_CHAIN" --mnemonic="$MNEMONIC" --keystore_password="$(cat "$PWD/validator_keys/password.txt")" --withdrawal_address="$VALIDATOR_WITHDRAWAL_ADDRESS" --regular-withdrawal
+      docker run --rm -v "$PWD/validator_keys:/app/validator_keys" gulabs/gu-ethstaker-deposit-cli:v0.0.1-gubuild.0 --non_interactive --ignore_connectivity existing-mnemonic --num_validators=1 --validator_start_index=0 --mnemonic_language=english --chain=joc --mnemonic="$MNEMONIC" --keystore_password="$(cat "$PWD/validator_keys/password.txt")" --withdrawal_address="$VALIDATOR_WITHDRAWAL_ADDRESS" --regular-withdrawal
 
     else
       echo 'Error: Could not generate or extract mnemonic.'
       exit 1
     fi
-    # --- END: adapted from guide, Step 2-2 -----------------------------------
+    # --- END: verbatim from guide, Step 2-2 ---------------------------------
 
     unset MNEMONIC
     clear

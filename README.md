@@ -185,10 +185,9 @@ existing `.env`), then runs whichever of the following apply:
 11. Generates `password.txt` (random, >12 chars) in `validator_keys/`,
     `chmod 600`.
 12. Runs the guide's two `ethstaker-deposit-cli` docker commands
-    (`generate-mnemonic`, then `existing-mnemonic`) **verbatim for
-    mainnet** — nothing is inserted between them. (Non-mainnet networks:
-    the guide only specifies `--chain=joc` for mainnet, so you're prompted
-    for the right `--chain` value — see [Self-review](#self-review--what-i-added-beyond-the-guide).)
+    (`generate-mnemonic`, then `existing-mnemonic`) **verbatim** —
+    including `--chain=joc`, which is the same for all three networks —
+    nothing is inserted between them.
 13. Prints the mnemonic exactly once, requires you to type `yes` to confirm
     you've written it down offline, then `unset`s it and clears the screen.
 14. Verifies `keystore-xxx.json`, `deposit_data-xxx.json`, `password.txt`
@@ -209,10 +208,10 @@ silently overwritten; you're asked before anything that isn't purely
 additive.
 
 **Changing `NETWORK` or `ROLE` after `init`:** not supported by this CLI.
-Validator keys and deposit data are network-specific (deposit already
-submitted, `--chain` baked into key derivation) — switching networks with
-the same keys isn't meaningful. Start a fresh checkout for a different
-network or role combination.
+Deposit data is submitted against a specific network's deposit contract,
+and the withdrawal address you provide is issued per-network by JBF/admin
+— reusing the same keys across networks isn't meaningful. Start a fresh
+checkout for a different network or role combination.
 
 ### `jocv config`
 
@@ -395,10 +394,6 @@ inferred/adapted or added — flagging it explicitly so you can double-check:
   /`sandbox` select their own config/genesis/bootnodes directory, on the
   assumption (not stated in the guide) that these networks follow the same
   file layout as mainnet.
-- **`--chain` value for non-mainnet key generation.** The guide's Step 2-2
-  command hardcodes `--chain=joc`. For `NETWORK=testnet`/`sandbox`,
-  `jocv init` prompts you for the correct value instead of guessing, since
-  the guide gives no indication what it should be.
 - **`docker-compose.yml` command as a YAML list, not a shell string**, for
   the `validator` service. The guide's Step 2-7 `docker run` block is
   missing a trailing `\` line-continuation on one line; expressing it as a
