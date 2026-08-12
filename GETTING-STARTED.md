@@ -59,7 +59,7 @@ Full detail: [README.md](README.md#what-this-is-not).
 ### 6. Connect to BCCloud
 
 ```bash
-./jocv beacon set http://<bccloud-node-ip>:3500
+./jocv validator beacon http://<bccloud-node-ip>:3500
 ```
 
 ### 7. Verify
@@ -69,13 +69,16 @@ Full detail: [README.md](README.md#what-this-is-not).
 ```
 
 Then submit `data/validator_keys/deposit_data-xxx.json` to Launchpad
-(guide Step 3-1).
+(guide Step 3-1) — or reprint it anytime with `./jocv validator
+deposit-data`.
 
 ## Next
 
-- `./jocv config` — change withdrawal address / beacon URL later
-- `./jocv update-config <phase>` — apply a hard fork phase config
-- `./jocv update` — pull the latest CLI/config from git
+- `./jocv validator address` / `./jocv validator beacon` — view or change
+  withdrawal address / beacon URL later
+- `./jocv validator deposit-data` — reprint the deposit data for Step 3-1
+- `./jocv network apply <phase>` — apply a hard fork phase config
+- `./jocv upgrade` — pull the latest CLI/config from git
 - `./jocv logs` / `./jocv down` — day-to-day operation
 - `./jocv reset --data` — wipe keys/deposit data/`.env` to start over (irreversible)
 

@@ -575,7 +575,7 @@ EOF
     info "BEACON_URL auto-set to the local beacon service (http://beacon:5052)."
   elif [[ "$ROLE" == "validator" ]] && ! grep -q '^BEACON_URL=http://beacon:5052$' "$ENV_FILE"; then
     warn "BEACON_URL is a safe local placeholder until you run:"
-    warn "  jocv beacon set http://<bccloud-node-ip>:3500"
+    warn "  jocv validator beacon http://<bccloud-node-ip>:3500"
     warn "once Step 2-3~2-5 are done on BCCloud."
   fi
 
@@ -618,94 +618,70 @@ EOF
   echo "================================================================" >&2
 }
 
-# --- jocv config -----------------------------------------------------------------
-# View/edit the settings of an already-initialized node, without touching
-# keys. For first-time setup (including key generation), use 'jocv init'.
-cmd_config() {
+# --- jocv validator address [<0x...>] -----------------------------------------------
+# View or change WITHDRAWAL_ADDRESS (guide Step 2-7's
+# --suggested-fee-recipient). No argument: print the current value. With
+# an argument: validate, write it, offer to apply. Doesn't touch keys —
+# for first-time setup (including key generation), use 'jocv init'.
+cmd_validator_address() {
   [[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found. Run 'jocv init' first."
   load_env
-  local role="${ROLE:-validator}" network="${NETWORK:-mainnet}"
+  local role="${ROLE:-validator}"
+  [[ "$role" == "validator" || "$role" == "all" ]] \
+    || die "ROLE=$role runs no Validator Client — there is no withdrawal address to view/set."
 
-  info "Current settings — NETWORK=$network, ROLE=$role"
-  echo "  WITHDRAWAL_ADDRESS = ${WITHDRAWAL_ADDRESS:-<unset>}" >&2
-  echo "  BEACON_URL         = ${BEACON_URL:-<unset>}" >&2
-  echo >&2
-  warn "NETWORK and ROLE are not editable here — they're fixed at 'jocv init'"
-  warn "time because keys/deposit data are network-specific. Use a fresh"
-  warn "checkout for a different network or role."
-
-  if [[ "$role" == "el-cl" ]]; then
-    warn "ROLE=el-cl runs no Validator Client — WITHDRAWAL_ADDRESS/BEACON_URL"
-    warn "don't apply. Execution/Consensus settings (EL_CLIENT_IMAGE,"
-    warn "EL_NETWORK_ID, bootnodes) aren't covered by this command yet —"
-    warn "edit $ENV_FILE directly for now."
+  local new_addr="${1:-}"
+  if [[ -z "$new_addr" ]]; then
+    echo "WITHDRAWAL_ADDRESS = ${WITHDRAWAL_ADDRESS:-<unset>}" >&2
     return 0
   fi
 
-  local changed=false new_addr new_beacon
+  is_valid_eth_address "$new_addr" || die "Invalid address. Expected 0x + 40 hex characters."
+  set_env_var "WITHDRAWAL_ADDRESS" "$new_addr"
+  success "WITHDRAWAL_ADDRESS updated in $ENV_FILE."
 
-  read -r -p "New withdrawal address (0x..., Enter to keep current): " new_addr
-  if [[ -n "$new_addr" ]]; then
-    is_valid_eth_address "$new_addr" || die "Invalid address. Expected 0x + 40 hex characters."
-    set_env_var "WITHDRAWAL_ADDRESS" "$new_addr"
-    success "WITHDRAWAL_ADDRESS updated."
-    changed=true
-  fi
-
-  if [[ "$role" == "all" ]]; then
-    info "ROLE=all: BEACON_URL is auto-managed (points at the local 'beacon'"
-    info "service) — not editable here. Use 'jocv beacon set' only if you"
-    info "specifically want to override that."
+  check_docker
+  if confirm "Apply now via 'docker compose up -d'?"; then
+    ( cd "$JOCV_ROOT" && docker compose up -d )
+    success "Applied. Check with: jocv status"
   else
-    read -r -p "New beacon URL (Enter to keep current; guided version: 'jocv beacon set'): " new_beacon
-    if [[ -n "$new_beacon" ]]; then
-      is_valid_url "$new_beacon" || die "Invalid URL. Expected http(s)://host[:port][/path]."
-      set_env_var "BEACON_URL" "$new_beacon"
-      success "BEACON_URL updated."
-      changed=true
-    fi
-  fi
-
-  if [[ "$changed" == true ]]; then
-    check_docker
-    if confirm "Apply now via 'docker compose up -d'?"; then
-      ( cd "$JOCV_ROOT" && docker compose up -d )
-      success "Applied. Check with: jocv status"
-    else
-      info "Not applied yet — run 'jocv up' when ready."
-    fi
-  else
-    info "Nothing changed."
+    info "Not applied yet — run 'jocv up' when ready."
   fi
 }
 
-# --- jocv beacon set <url> ---------------------------------------------------------
-# Point the Validator Client at a Consensus Client / Beacon Node HTTP API.
-# Only meaningful for ROLE=validator (guide Option 2). Used at two points
-# in the guide, and deliberately shares the same mechanism for both:
+# --- jocv validator beacon [<url>] --------------------------------------------------
+# View or change BEACON_URL — the Consensus Client / Beacon Node HTTP API
+# the Validator Client connects to. No argument: print the current value.
+# With a URL: validate, write it, apply immediately (recreates the
+# validator container). Used at two points in the guide, sharing the same
+# mechanism for both:
 #   - Step 2-7: first connection to the Consensus Client on BCCloud, after
 #     Step 2-5 opens the Consensus HTTP API (e.g. http://<node-ip>:3500).
 #   - Step 4-1: whenever the BCCloud endpoint needs to change as part of a
 #     hard fork phase rollout.
-cmd_beacon_set() {
-  local beacon_url="${1:-}"
-  [[ -n "$beacon_url" ]] || die "Usage: jocv beacon set <url>   (e.g. http://<bccloud-node-ip>:3500)"
-  is_valid_url "$beacon_url" || die "Invalid URL: '$beacon_url' (expected http(s)://host[:port][/path])"
-
+cmd_validator_beacon() {
   [[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found. Run 'jocv init' first."
   load_env
+  local role="${ROLE:-validator}"
+  [[ "$role" != "el-cl" ]] \
+    || die "ROLE=el-cl runs no Validator Client — there is no beacon URL to view/set."
 
-  case "${ROLE:-validator}" in
-    el-cl)
-      die "ROLE=el-cl runs no Validator Client — there is nothing to point at a beacon URL for."
-      ;;
-    all)
-      warn "ROLE=all: BEACON_URL is normally auto-managed to point at the local"
-      warn "'beacon' service (http://beacon:5052). Overriding it here means your"
-      warn "Validator Client will stop talking to your own beacon node."
-      confirm "Set BEACON_URL to '$beacon_url' anyway?" || die "Aborted. Nothing was changed."
-      ;;
-  esac
+  local beacon_url="${1:-}"
+  if [[ -z "$beacon_url" ]]; then
+    echo "BEACON_URL = ${BEACON_URL:-<unset>}" >&2
+    [[ "$role" == "all" ]] \
+      && info "ROLE=all: auto-managed, normally points at the local 'beacon' service."
+    return 0
+  fi
+
+  is_valid_url "$beacon_url" || die "Invalid URL: '$beacon_url' (expected http(s)://host[:port][/path])"
+
+  if [[ "$role" == "all" ]]; then
+    warn "ROLE=all: BEACON_URL is normally auto-managed to point at the local"
+    warn "'beacon' service (http://beacon:5052). Overriding it here means your"
+    warn "Validator Client will stop talking to your own beacon node."
+    confirm "Set BEACON_URL to '$beacon_url' anyway?" || die "Aborted. Nothing was changed."
+  fi
 
   set_env_var "BEACON_URL" "$beacon_url"
   success "BEACON_URL set to $beacon_url in $ENV_FILE"
@@ -714,6 +690,35 @@ cmd_beacon_set() {
   info "Applying via docker compose up -d (recreates the validator container with the new value)..."
   ( cd "$JOCV_ROOT" && docker compose up -d )
   success "Done. Check status with: jocv status"
+}
+
+# --- jocv validator deposit-data -----------------------------------------------------
+# Reprint the deposit_data-*.json path + contents generated by 'jocv init'
+# (guide Step 3-1) — for whenever you need it again after the one-time
+# printout at init time (e.g. lost terminal scrollback). Public data only
+# (pubkey/signature/withdrawal credentials) — never touches the mnemonic
+# or any secret file.
+cmd_validator_deposit_data() {
+  [[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found. Run 'jocv init' first."
+  load_env
+  local role="${ROLE:-validator}"
+  [[ "$role" == "validator" || "$role" == "all" ]] \
+    || die "ROLE=$role runs no Validator Client — there is no deposit data."
+
+  shopt -s nullglob
+  local deposit_files=("$KEYS_DIR"/deposit_data-*.json)
+  shopt -u nullglob
+  [[ ${#deposit_files[@]} -gt 0 ]] \
+    || die "No deposit_data-*.json found in $KEYS_DIR. Run 'jocv init' first."
+
+  info "Deposit data file (guide Step 3-1 — submit this yourself if you haven't already):"
+  echo "  ${deposit_files[0]}" >&2
+  echo >&2
+  info "Contents, for copy/paste:"
+  echo "----------------------------------------------------------------" >&2
+  cat "${deposit_files[0]}"
+  echo >&2
+  echo "----------------------------------------------------------------" >&2
 }
 
 # --- jocv status -------------------------------------------------------------------
@@ -761,14 +766,16 @@ cmd_status() {
   [[ "$overall_ok" == true ]] || return 1
 }
 
-# --- jocv update-config <phase> -----------------------------------------------------
+# --- jocv network apply <phase> -------------------------------------------------------
 # Guide Step 4: apply a new hard fork phase's consensus config to an
 # already-running node. Never runs `git pull` itself and never fetches a
 # config over the network on its own — pulling in a new consensus config
 # is a human-reviewed action, not something to automate silently.
-cmd_update_config() {
+# (Named deliberately differently from 'jocv upgrade' — that updates this
+# CLI's own code via git; this updates the network's consensus config.)
+cmd_network_apply() {
   local phase="${1:-}"
-  [[ -n "$phase" ]] || die "Usage: jocv update-config <phase-label>   (e.g. tokyo-phase-2)"
+  [[ -n "$phase" ]] || die "Usage: jocv network apply <phase-label>   (e.g. tokyo-phase-2)"
 
   [[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found. Run 'jocv init' first."
   load_env
@@ -819,7 +826,7 @@ If your team version-controls configs in this repo:
 Otherwise, get it from JBF/admin (Step 4-1, item 3) and place it at one of
 the paths above.
 
-Then re-run: jocv update-config $phase
+Then re-run: jocv network apply $phase
 EOF
     die "Config not found for phase '$phase'."
   fi
@@ -855,23 +862,26 @@ EOF
   warn "Also check the logs for critical errors (Step 4-1, Note)."
 }
 
-# --- jocv update ---------------------------------------------------------------------
+# --- jocv upgrade ----------------------------------------------------------------------
 # Update this CLI itself (this file, the per-client *.yml compose files,
 # and any networks/ files your team commits) via `git pull`. Loosely
 # modeled on eth-docker's `ethd update`, but much simpler: no OS package
 # management, no .env migration, no automatic container restart or config
-# apply.
-cmd_update() {
+# apply. Named 'upgrade' rather than 'update' specifically to not collide
+# with 'jocv network apply' (which updates the network's consensus config,
+# not this CLI's code) — the two used to be confusingly-similarly-named
+# 'update'/'update-config'.
+cmd_upgrade() {
   [[ -d "$JOCV_ROOT/.git" ]] \
-    || die "$JOCV_ROOT is not a git checkout. Clone this repo with 'git clone' to use 'jocv update'."
-  command -v git >/dev/null 2>&1 || die "git is required for 'jocv update'."
+    || die "$JOCV_ROOT is not a git checkout. Clone this repo with 'git clone' to use 'jocv upgrade'."
+  command -v git >/dev/null 2>&1 || die "git is required for 'jocv upgrade'."
 
   cd "$JOCV_ROOT"
 
   if [[ -n "$(git status --porcelain)" ]]; then
     warn "This checkout has local changes (git status is not clean):"
     git status --short >&2
-    die "Commit, stash, or discard local changes before running 'jocv update'."
+    die "Commit, stash, or discard local changes before running 'jocv upgrade'."
   fi
 
   local branch
@@ -913,7 +923,7 @@ cmd_update() {
   if [[ -n "$phases_changed" ]]; then
     warn "New/changed phase config(s) pulled in:"
     echo "$phases_changed" | sed 's/^/  /' >&2
-    warn "Run 'jocv update-config <phase>' for the relevant phase once JBF/admin"
+    warn "Run 'jocv network apply <phase>' for the relevant phase once JBF/admin"
     warn "officially announces it — do not apply on your own initiative."
   fi
   if [[ -n "$el_cl_changed" ]]; then
@@ -1043,28 +1053,35 @@ usage() {
 jocv — JOC node CLI (validator / plain node / both)
 
 Usage:
-  jocv install                  Install Docker (Engine + compose plugin) if missing
-  jocv init                     Set up this node: prompts for NETWORK
-                                 (mainnet|testnet|sandbox) and ROLE
-                                 (validator|el-cl|all), then runs the
-                                 matching guide steps (Step 2 for 'validator')
-  jocv config                   View/edit settings of an already-initialized
-                                 node (WITHDRAWAL_ADDRESS, BEACON_URL) without
-                                 touching keys — NETWORK/ROLE fixed at init
-  jocv beacon set <url>         Point the Validator Client at an external
-                                 Consensus Client (ROLE=validator only —
-                                 Step 2-7 initial connection / Step 4 changes)
-  jocv status                   Check whichever service(s) ROLE runs (Step 3-2
-                                 for the validator container)
-  jocv update-config <phase>    Apply a new hard fork phase's consensus config
-                                 for the current NETWORK (Step 4)
-  jocv update                   Update this CLI itself via 'git pull' (code +
-                                 any networks/ files your team commits)
-  jocv up                       Start/apply whichever service(s) ROLE needs
-  jocv down                     Stop them
-  jocv reset [--data]           Stop + remove containers; with --data, also
-                                 PERMANENTLY delete keys/deposit data/.env
-  jocv logs [service]           Follow a service's logs (execution|beacon|validator)
+  jocv install                     Install Docker (Engine + compose plugin) if missing
+  jocv init                        Set up this node: prompts for NETWORK
+                                    (mainnet|testnet|sandbox) and ROLE
+                                    (validator|el-cl|all), then runs the
+                                    matching guide steps (Step 2 for 'validator')
+
+  jocv validator address [<0x...>] View, or set + apply, WITHDRAWAL_ADDRESS
+                                    (validator/all only)
+  jocv validator beacon [<url>]    View, or set + apply, BEACON_URL — the
+                                    Consensus Client the Validator Client talks
+                                    to (Step 2-7 initial connection / Step 4
+                                    changes; not for ROLE=el-cl)
+  jocv validator deposit-data      Reprint the deposit_data-*.json path +
+                                    contents from 'jocv init' (Step 3-1)
+
+  jocv network apply <phase>       Apply a new hard fork phase's consensus
+                                    config for the current NETWORK (Step 4)
+
+  jocv status                      Check whichever service(s) ROLE runs (Step
+                                    3-2 for the validator container)
+  jocv up                          Start/apply whichever service(s) ROLE needs
+  jocv down                        Stop them
+  jocv logs [service]              Follow a service's logs (execution|beacon|validator)
+  jocv reset [--data]              Stop + remove containers; with --data, also
+                                    PERMANENTLY delete keys/deposit data/.env
+
+  jocv upgrade                     Update this CLI itself via 'git pull' (code +
+                                    any networks/ files your team commits) —
+                                    NOT the same as 'jocv network apply'
 
 Run 'jocv <command>' with no further arguments for command-specific usage.
 See README.md for the full walkthrough, the ROLE/NETWORK/CLIENT model,
@@ -1078,27 +1095,38 @@ main() {
   [[ $# -gt 0 ]] && shift || true
 
   case "$cmd" in
-    install)       cmd_install "$@" ;;
-    init)          cmd_init "$@" ;;
-    config)        cmd_config "$@" ;;
-    beacon)
+    install)   cmd_install "$@" ;;
+    init)      cmd_init "$@" ;;
+    validator)
       local sub="${1:-}"
       [[ $# -gt 0 ]] && shift || true
       case "$sub" in
-        set) cmd_beacon_set "$@" ;;
+        address)      cmd_validator_address "$@" ;;
+        beacon)       cmd_validator_beacon "$@" ;;
+        deposit-data) cmd_validator_deposit_data "$@" ;;
         *)
-          echo "Usage: jocv beacon set <url>" >&2
+          echo "Usage: jocv validator <address [<0x...>]|beacon [<url>]|deposit-data>" >&2
           exit 1
           ;;
       esac
       ;;
-    status)        cmd_status "$@" ;;
-    update-config) cmd_update_config "$@" ;;
-    update)        cmd_update "$@" ;;
-    up)            cmd_up "$@" ;;
-    down)          cmd_down "$@" ;;
-    reset)         cmd_reset "$@" ;;
-    logs)          cmd_logs "$@" ;;
+    network)
+      local sub="${1:-}"
+      [[ $# -gt 0 ]] && shift || true
+      case "$sub" in
+        apply) cmd_network_apply "$@" ;;
+        *)
+          echo "Usage: jocv network apply <phase>" >&2
+          exit 1
+          ;;
+      esac
+      ;;
+    status)    cmd_status "$@" ;;
+    upgrade)   cmd_upgrade "$@" ;;
+    up)        cmd_up "$@" ;;
+    down)      cmd_down "$@" ;;
+    reset)     cmd_reset "$@" ;;
+    logs)      cmd_logs "$@" ;;
     -h | --help | help | "")
       usage
       ;;

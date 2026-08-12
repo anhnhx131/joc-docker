@@ -92,11 +92,11 @@ much smaller — no OS provisioning, no `.env` schema migration engine, and
 | --- | --- | --- |
 | `install` (installs Docker, OS packages, tunes the OS, adds user to `docker` group) | `jocv install` | Installs Docker Engine + compose plugin only (official apt repo on Ubuntu/Debian, best-effort dnf repo elsewhere), and adds your user to the `docker` group. Deliberately does **not** tune the OS (swappiness, noatime, chrony/NTP) or install unrelated packages — a tool that's about to handle your mnemonic shouldn't also be doing broad root-level OS provisioning. Shows every `sudo` command before running it and asks for confirmation once. Idempotent: no-ops if Docker is already installed and working. |
 | One `.yml` file per client (e.g. `lighthouse-vc-only.yml`), merged via `COMPOSE_FILE` | Same — `lighthouse-vc-only.yml`, `geth.yml`, `lighthouse-cl-only.yml`, merged via `COMPOSE_FILE` per `ROLE` | This one isn't simplified, just scoped down: eth-docker has ~5 EL × ~6 CL × addons; `jocv` has exactly the files today's `SUPPORTED_EL_CLIENTS`/`SUPPORTED_CL_CLIENTS` need. |
-| `config` (interactive `.env` wizard + schema migration across versions) | `jocv init` prompts (network/role) + `jocv beacon set <url>` | A handful of variables, not dozens — no schema to migrate. |
+| `config` (interactive `.env` wizard + schema migration across versions) | `jocv init` prompts (network/role) + `jocv validator address`/`beacon` | A handful of variables, not dozens — no schema to migrate. |
 | `up` | `jocv up` | Same idea: `docker compose up -d`, respecting `COMPOSE_FILE`. |
 | `down` / `stop` | `jocv down` | Same idea, with a guide-specific reminder not to stop while awaiting activation (Step 3-2). |
 | `logs` | `jocv logs [service]` | Same idea: `docker compose logs -f`. Asks which service if more than one is active. |
-| `update` (`git pull`, `.env` migration, image rebuild, restart, all in one) | `jocv update` | Only does the `git pull` part, and only if the working tree is clean and the pull is a fast-forward. Never migrates `.env`, never restarts anything, never applies a new config by itself — it just tells you what changed and which command to run next. |
+| `update` (`git pull`, `.env` migration, image rebuild, restart, all in one) | `jocv upgrade` | Only does the `git pull` part, and only if the working tree is clean and the pull is a fast-forward. Never migrates `.env`, never restarts anything, never applies a new config by itself — it just tells you what changed and which command to run next. Named `upgrade` rather than `update` specifically so it can't be confused with `jocv network apply <phase>`, which updates the network's consensus config, not this CLI's code. |
 
 ## Prerequisites
 
@@ -134,7 +134,7 @@ much smaller — no OS provisioning, no `.env` schema migration engine, and
 #             and note the BCCloud node's IP address
 # ------------------------------------------------------------------------
 
-./jocv beacon set http://<bccloud-validator-node-ip>:3500
+./jocv validator beacon http://<bccloud-validator-node-ip>:3500
 ./jocv status         # guide Step 3-2
 ```
 
@@ -246,7 +246,7 @@ for two reasons:
 - It's the part of this project most likely to need independent tweaking
   (image version/tag, extra flags, a future non-Lighthouse import command)
   — changing it never requires touching `jocv`'s larger lifecycle logic
-  (`install`/`up`/`down`/`logs`/`update`), and vice versa.
+  (`install`/`up`/`down`/`logs`/`upgrade`), and vice versa.
 - It's the single most security-sensitive part of the whole project
   (mnemonic handling). Small, single-purpose files are easier to read
   start-to-finish and diff against the guide than a block buried inside a
@@ -306,25 +306,34 @@ structural pattern — a dedicated "tools"-profile compose service plus its
 own entrypoint script, instead of a raw `docker run` in a host script —
 and the chown-back-to-host-user convention described above.
 
-### `jocv config`
+### `jocv validator address [<0x...>]`
 
-For an already-initialized node: view current `WITHDRAWAL_ADDRESS` /
-`BEACON_URL`, optionally change them, then offers to apply via
-`docker compose up -d`. Doesn't touch keys, `NETWORK`, or `ROLE` — those
-are fixed at `jocv init` time (see above). For `ROLE=el-cl` it just prints
-current values and tells you to edit `.env` directly for
-execution/consensus settings (not covered by this command yet). For
-`ROLE=all`, `BEACON_URL` is skipped here since it's auto-managed — use
-`jocv beacon set` if you specifically need to override it.
+For an already-initialized node with `ROLE=validator`/`all`. No argument:
+prints the current `WITHDRAWAL_ADDRESS`. With an address: validates it,
+writes it to `.env`, then offers to apply via `docker compose up -d`.
+Doesn't touch keys, `NETWORK`, or `ROLE` — those are fixed at `jocv init`
+time (see above). Refuses for `ROLE=el-cl` (no Validator Client, nothing
+to set).
 
-### `jocv beacon set <url>`
+### `jocv validator beacon [<url>]`
 
-Only for `ROLE=validator` (points the Validator Client at an external
-Consensus Client — BCCloud in guide Step 2-7, or a new endpoint for a
-Step 4 hard fork change). For `ROLE=all` it warns first (you're normally
-pointed at your own local `beacon` service automatically) and asks you to
-confirm before overriding. For `ROLE=el-cl` it refuses (no Validator
-Client runs in that role).
+No argument: prints the current `BEACON_URL`. With a URL: points the
+Validator Client at a Consensus Client / Beacon Node HTTP API and applies
+immediately (`docker compose up -d`, recreating the `validator`
+container) — BCCloud in guide Step 2-7, or a new endpoint for a Step 4
+hard fork change. For `ROLE=all` it warns first (you're normally pointed
+at your own local `beacon` service automatically) and asks you to confirm
+before overriding. Refuses for `ROLE=el-cl` (no Validator Client runs in
+that role).
+
+### `jocv validator deposit-data`
+
+Reprints the `deposit_data-*.json` path and contents generated by `jocv
+init` (guide Step 3-1) — for whenever you need it again after the
+one-time printout at init time (lost terminal scrollback, submitting from
+a different session, etc.). Public data only (pubkey/signature/withdrawal
+credentials) — never touches the mnemonic, keystore, or password file.
+Refuses for `ROLE=el-cl`.
 
 ### `jocv status`
 
@@ -335,7 +344,7 @@ minutes after the first 5-10 minutes is a sign something's wrong). The
 `execution`/`beacon` checks are this project's own addition — the guide
 doesn't cover self-hosting them.
 
-### `jocv update-config <phase>`
+### `jocv network apply <phase>`
 
 For guide Step 4 (applying a new Tokyo Hard Fork phase), against
 `networks/<NETWORK>/cl/`. Looks for a config in this order:
@@ -368,7 +377,7 @@ page), the update flow for a new hard fork phase becomes:
 2. **On each node:**
    ```bash
    git pull
-   ./jocv update-config <phase>
+   ./jocv network apply <phase>
    ```
 `jocv` will find the file your team committed, show its checksum, and
 still requires you to confirm it's correct before applying — see
@@ -376,10 +385,14 @@ still requires you to confirm it's correct before applying — see
 (`config.yaml` controls consensus rules, so this step is deliberately
 never fully automated).
 
-### `jocv update`
+### `jocv upgrade`
 
 Updates this CLI checkout itself via `git pull` — the code, and any
-`networks/` files your team commits (see above). Refuses to run if:
+`networks/` files your team commits (see above). Named `upgrade` rather
+than `update` specifically so it can't be confused with `jocv network
+apply <phase>` above — one updates this CLI's own code, the other updates
+the network's consensus config; they used to be confusingly-similarly
+named `update`/`update-config`. Refuses to run if:
 - this directory isn't a git checkout,
 - the working tree has uncommitted changes, or
 - the pull wouldn't be a fast-forward (i.e. your local branch diverged).
@@ -388,7 +401,7 @@ Shows the incoming commits and asks for confirmation before pulling.
 Afterward it tells you — but does not act on — whether any root-level
 `*.yml` compose file, `networks/*/cl/phases/**`, or `networks/*/el/**`
 changed, so you follow up deliberately with `jocv up` /
-`jocv update-config <phase>` / a fresh `jocv init` respectively.
+`jocv network apply <phase>` / a fresh `jocv init` respectively.
 
 ### `jocv up` / `jocv down` / `jocv logs [service]`
 
@@ -602,7 +615,7 @@ inferred/adapted or added — flagging it explicitly so you can double-check:
   `git pull` workflow, checksum + confirm before applying). Entirely
   outside the guide, which only describes manual downloads. Deliberately
   still requires an explicit human "verify against the official source"
-  confirmation before `jocv update-config` applies anything, and `jocv`
+  confirmation before `jocv network apply` applies anything, and `jocv`
   never runs `git pull` or fetches configs over the network on its own.
 - **`jocv install`.** The guide only says "ensure Docker is set up" and
   links Docker's own install guide — it doesn't specify a method. This
@@ -617,6 +630,15 @@ inferred/adapted or added — flagging it explicitly so you can double-check:
   with one `cmd_<name>()` function per subcommand instead of one process
   per file. Not from the guide or from eth-docker's exact layout, but
   deliberately modeled on `ethd`'s single-file shape.
+- **`jocv validator <address|beacon|deposit-data>` namespace**, replacing
+  the earlier flat `jocv config` + `jocv beacon set <url>`. Not from the
+  guide — a UX cleanup: those two commands overlapped (both could set
+  `BEACON_URL`), and `jocv validator deposit-data` is new (previously the
+  deposit data was only ever printed once, at `jocv init` time). Also
+  renamed `jocv update-config <phase>` → `jocv network apply <phase>` and
+  `jocv update` → `jocv upgrade`, since the old `update`/`update-config`
+  pair read as two variants of the same command when they do unrelated
+  things (this CLI's own code vs. the network's consensus config).
 
 No multi-validator support, no notifications, no client beyond
 `geth`+`lighthouse` — nothing was added beyond what was asked for.
