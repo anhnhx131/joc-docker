@@ -192,19 +192,12 @@ existing `.env`), then runs whichever of the following apply:
 
 **`validator` / `all` only** (guide Step 2-2, 2-6):
 9. Prompts for your withdrawal address, validated as `0x` + 40 hex chars.
-10. Disables shell history before touching the mnemonic (`set +o history`;
-    no `set -x` anywhere near it).
-11. Generates `password.txt` (random, >12 chars) in `validator_keys/`,
-    `chmod 600`.
-12. Runs the guide's two `ethstaker-deposit-cli` docker commands
-    (`generate-mnemonic`, then `existing-mnemonic`) **verbatim** —
-    including `--chain=joc`, which is the same for all three networks —
-    nothing is inserted between them.
-13. Prints the mnemonic exactly once, requires you to type `yes` to confirm
-    you've written it down offline, then `unset`s it and clears the screen.
-14. Verifies `keystore-xxx.json`, `deposit_data-xxx.json`, `password.txt`
-    were created, `chmod 600`s all of them.
-15. Imports the key into Lighthouse (guide Step 2-6 command).
+10. Delegates to [`./deposit-cli`](#deposit-cli) — a separate, standalone
+    script — to actually generate and import the key. `jocv init` never
+    runs an `ethstaker-deposit-cli`/`lighthouse` docker command itself; see
+    that file for what it does step by step (password, mnemonic, the
+    guide's two verbatim `deposit-cli` commands, the mandatory typed `yes`
+    confirmation, then the Step 2-6 Lighthouse import).
 
 **Always, at the end:**
 16. Writes/updates `.env` (`NETWORK`, `ROLE`, `COMPOSE_FILE`, client
@@ -224,6 +217,37 @@ Deposit data is submitted against a specific network's deposit contract,
 and the withdrawal address you provide is issued per-network by JBF/admin
 — reusing the same keys across networks isn't meaningful. Start a fresh
 checkout for a different network or role combination.
+
+### `deposit-cli`
+
+A separate, standalone script (not a `jocv` subcommand) that does the
+actual guide Step 2-2 / 2-6 work:
+
+```
+deposit-cli generate --keys-dir <dir> --withdrawal-address <0x...>
+deposit-cli import   --keys-dir <dir> --testnet-dir <cl-config-dir> [--datadir <dir>]
+```
+
+`jocv init` calls both of these for you automatically for `ROLE=validator`/
+`all` — most people never invoke it directly. It's kept as its own file,
+deliberately outside `jocv`, for two reasons:
+
+- It's the part of this project most likely to need independent tweaking
+  (deposit-cli image version/tag, extra flags, a future non-Lighthouse
+  import command) — changing it never requires touching `jocv`'s larger
+  lifecycle logic (`install`/`up`/`down`/`logs`/`update`), and vice versa.
+- It's the single most security-sensitive part of the whole project
+  (mnemonic handling). A small, single-purpose file is easier to read
+  start-to-finish and diff against the guide than a block buried inside a
+  1000+ line CLI.
+
+`generate` never submits anything to any network — it only runs local
+`docker run` commands and, at the end, prints the resulting
+`deposit_data-*.json` path and contents so **you** copy/submit it yourself
+(guide Step 3-1). `import` is local-only too (hands the keystore to a
+local Lighthouse container). Copy this one file anywhere with Docker
+installed to run it standalone, e.g. to generate keys on a separate
+machine from the one running the Validator Client.
 
 ### `jocv config`
 
@@ -365,8 +389,9 @@ guide-verified path.
 ## Security
 
 - The mnemonic is **never** written to a file, logged, or sent over the
-  network — it lives only in a shell variable for the few seconds between
-  the two `ethstaker-deposit-cli` calls, and is `unset` immediately after.
+  network — it lives only in a shell variable, inside `deposit-cli`, for
+  the few seconds between the two `ethstaker-deposit-cli` calls, and is
+  `unset` immediately after.
 - `set -x` is never used anywhere near `MNEMONIC` or `password.txt`.
 - Every file under `validator_keys/` is `chmod 600`; `data/jwt.hex`
   (execution↔consensus shared secret) likewise.
@@ -378,22 +403,29 @@ guide-verified path.
   [Updating config via git](#updating-config-via-git)). Never confuse this
   directory with `data/validator_keys/` — nothing under `networks/` should
   ever contain a mnemonic, keystore, or password.
-- `jocv init`'s validator path calls the exact docker images JBF/admin
-  published in the guide (`gulabs/gu-ethstaker-deposit-cli:v0.0.1-gubuild.0`,
+- Key generation/import (`deposit-cli`) calls the exact docker images
+  JBF/admin published in the guide
+  (`gulabs/gu-ethstaker-deposit-cli:v0.0.1-gubuild.0`,
   `sigp/lighthouse:v7.0.1`) directly. No intermediate image or script
   touches your key material — this is intentional, so you can diff every
   command this CLI runs against the guide's own text and trust that
   nothing "extra" is happening. (This guarantee does **not** extend to the
   `execution`/`beacon` services — see [Option 3 caveat](#option-3-caveat-el-cl-roles).)
+- Neither `deposit-cli generate` nor `deposit-cli import` ever submits
+  anything to any network — both only run local `docker run` commands
+  against your own disk. Submitting `deposit_data-*.json` (guide Step 3-1)
+  is a manual step you do yourself, on purpose — this repo doesn't automate it.
 
 ### Verify this yourself
 
 Please don't run this blind. Before trusting it with a real mnemonic:
 
-1. **Read the code.** It's one file: `jocv`. `cmd_init()` is the function
-   that matters most. The two `docker run ... ethstaker-deposit-cli` blocks
-   are marked `# --- BEGIN/END: verbatim from guide, Step 2-2 ---` so you
-   can diff them character-for-character against the original guide.
+1. **Read the code.** The CLI proper is one file, `jocv`. Key
+   generation/import is a second, separate file, `deposit-cli` — read that
+   one specifically before trusting it with a real mnemonic. The two
+   `docker run ... ethstaker-deposit-cli` blocks in `cmd_generate()` are
+   marked `# --- BEGIN/END: verbatim from guide, Step 2-2 ---` so you can
+   diff them character-for-character against the original guide.
 2. **Test mnemonic generation with no network access.** The guide's own
    command already uses `--ignore_connectivity`, which tells the deposit
    CLI not to check chain connectivity — you can run
@@ -452,11 +484,17 @@ inferred/adapted or added — flagging it explicitly so you can double-check:
   the guide — a deliberately inert default so `docker compose up -d` can
   succeed without pointing at anything real. For `ROLE=all` it's instead
   auto-set to the local `beacon` service.
-- **`cd "$DATA_DIR"` before running the guide's `$PWD`-relative commands**,
-  and a second `-v` mount in the Step 2-6 import command so
+- **A second `-v` mount in the Step 2-6 import command** so
   `--testnet-dir=/data/config` still resolves now that consensus config
   lives under `networks/<NETWORK>/cl` instead of `data/config`. Same
   flags/values as the guide otherwise.
+- **Key generation/import split into a standalone `deposit-cli` script**,
+  called by `jocv init` rather than inlined in `jocv` itself. Not from the
+  guide — a deliberate architecture choice so the most security-sensitive,
+  most likely-to-change part of this project (deposit-cli image version,
+  extra flags, a future non-Lighthouse import command) never requires
+  touching `jocv`'s larger lifecycle logic, and can be read/audited/run
+  standalone. See [`deposit-cli`](#deposit-cli) above.
 - **Idempotency guards** (skip key generation if keys already exist; ask
   before overwriting non-empty directories or an existing `.env`). The
   guide is written as a one-time walkthrough and doesn't address re-runs.
@@ -498,7 +536,7 @@ No multi-validator support, no notifications, no client beyond
 
 ```
 joc-docker/
-├── jocv                       # the whole CLI — one file, ~1200 lines:
+├── jocv                       # the whole CLI — one file, ~1100 lines:
 │                              #   1. paths + SUPPORTED_* allow-lists
 │                              #   2. helpers (logging, confirm(), validators,
 │                              #      env/network utilities, check_el_config())
@@ -506,6 +544,10 @@ joc-docker/
 │                              #      (install, init, config, beacon_set, status,
 │                              #      update_config, update, up, down, reset, logs)
 │                              #   4. usage() + dispatch (case "$1") at the bottom
+├── deposit-cli                # standalone key ceremony helper (Step 2-2, 2-6)
+│                              #   generate: mnemonic + keystore + deposit data
+│                              #   import: hands keystore to a local Lighthouse
+│                              # called by 'jocv init', but runnable on its own
 ├── lighthouse-vc-only.yml     # 'validator' service — guide-verbatim (Step 2-7)
 ├── geth.yml                    # 'execution' service — el-cl/all only, unverified (Option 3 caveat)
 ├── lighthouse-cl-only.yml       # 'beacon' service — el-cl/all only, unverified (Option 3 caveat)

@@ -18,9 +18,9 @@
 #   4. usage() + dispatch (case "$1") at the very bottom
 #
 # The two ethstaker-deposit-cli docker commands and the Step 2-6 import
-# command inside cmd_init() are marked with BEGIN/END comments so you can
-# diff them directly against the guide text — see README.md's
-# "Verify this yourself" section.
+# command live in ./deposit-cli, not in this file (see that file's header
+# for why), marked with BEGIN/END comments so you can diff them directly
+# against the guide text — see README.md's "Verify this yourself" section.
 set -euo pipefail
 
 # =============================================================================
@@ -215,16 +215,6 @@ load_env() {
   # shellcheck disable=SC1090
   source "$ENV_FILE"
   set +a
-}
-
-# --- secret hygiene ------------------------------------------------------------
-# Installs a trap so that if cmd_init exits early (error, Ctrl-C, etc.)
-# while a mnemonic is loaded, the MNEMONIC variable does not linger in the
-# shell's memory any longer than necessary. This does NOT write anything
-# to disk or logs — it only unsets the in-memory shell variable.
-install_secret_cleanup_trap() {
-  # shellcheck disable=SC2064
-  trap 'unset MNEMONIC 2>/dev/null || true' EXIT INT TERM
 }
 
 # =============================================================================
@@ -507,6 +497,10 @@ EOF
   fi
 
   # --- Validator setup (ROLE=validator or all) — Guide Step 2-2, 2-6 -------
+  # The actual key-generation/import docker commands live in ./deposit-cli,
+  # not here — see that file's header comment for why it's kept separate
+  # (independent tweaking, most security-sensitive part of this project).
+  # This block only collects the withdrawal address and calls it.
   if [[ "$needs_validator" == true ]]; then
     info "Validator setup: withdrawal address"
     if [[ -n "${VALIDATOR_WITHDRAWAL_ADDRESS:-}" ]] && is_valid_eth_address "${VALIDATOR_WITHDRAWAL_ADDRESS:-}"; then
@@ -523,111 +517,16 @@ EOF
     export VALIDATOR_WITHDRAWAL_ADDRESS
 
     # All three networks (mainnet/testnet/sandbox) share the same
-    # ethstaker-deposit-cli chain config, per the guide's Step 2-2 command —
-    # --chain is hardcoded to "joc" below regardless of NETWORK.
-
-    shopt -s nullglob
-    local existing_keystores=("$KEYS_DIR"/keystore-*.json)
-    local existing_deposits=("$KEYS_DIR"/deposit_data-*.json)
-    shopt -u nullglob
-
-    if [[ ${#existing_keystores[@]} -gt 0 && ${#existing_deposits[@]} -gt 0 ]]; then
-      warn "Validator keys already exist in $KEYS_DIR — skipping key generation."
-      warn "If you really need to regenerate, remove keystore-*.json, deposit_data-*.json" \
-           "and password.txt yourself first (this invalidates any previously submitted" \
-           "deposit data) and re-run 'jocv init'."
-    else
-      info "Generating password, mnemonic, validator keys and deposit data..."
-
-      local password_file="$KEYS_DIR/password.txt"
-      if [[ ! -f "$password_file" ]]; then
-        ( umask 077 && openssl rand -base64 24 | tr -d '\n' > "$password_file" )
-        chmod 600 "$password_file"
-        success "Generated $password_file (chmod 600, >12 characters)."
-      else
-        warn "$password_file already exists, reusing it."
-        chmod 600 "$password_file"
-      fi
-
-      # --- Security: no shell history, no xtrace, for the mnemonic section. ---
-      set +o history
-      install_secret_cleanup_trap
-
-      info "Running ethstaker-deposit-cli generate-mnemonic (Step 2-2, verbatim command)..."
-      # --- BEGIN: verbatim from guide, Step 2-2 -------------------------------
-      PWD=$(pwd)
-      echo 'Generating mnemonic with ethstaker-deposit-cli..'
-
-      MNEMONIC=$(
-        docker run --rm -v "$PWD/validator_keys:/app/validator_keys" gulabs/gu-ethstaker-deposit-cli:v0.0.1-gubuild.0 --non_interactive --ignore_connectivity generate-mnemonic --mnemonic_language=english
-      )
-      if [ -n "$MNEMONIC" ]; then
-          echo -e "\033[32m✅ Mnemonic generated successfully.\033[0m"
-      else
-          echo -e "\033[31m❌ Failed to generate mnemonic.\033[0m"
-          exit 1
-      fi
-      # --- END: verbatim from guide, Step 2-2 ---------------------------------
-
-      echo >&2
-      echo "================================================================" >&2
-      shout " MNEMONIC — write this down OFFLINE now. It will only be shown once:"
-      echo >&2
-      echo " $MNEMONIC" >&2
-      echo >&2
-      echo "================================================================" >&2
-      echo >&2
-      warn "It is never written to disk, never logged, and never sent over the network."
-      read -r -p "Have you securely written down this mnemonic OFFLINE? Type 'yes' to continue: " CONFIRM_SAVED
-      if [[ "$CONFIRM_SAVED" != "yes" ]]; then
-        die "Aborted: mnemonic was not confirmed as saved. No keys were generated."
-      fi
-
-      info "Running ethstaker-deposit-cli existing-mnemonic (Step 2-2, verbatim command)..."
-      # --- BEGIN: verbatim from guide, Step 2-2 -------------------------------
-      if [ -n "$MNEMONIC" ]; then
-        echo 'Creating validator keys with existing mnemonic..'
-
-        docker run --rm -v "$PWD/validator_keys:/app/validator_keys" gulabs/gu-ethstaker-deposit-cli:v0.0.1-gubuild.0 --non_interactive --ignore_connectivity existing-mnemonic --num_validators=1 --validator_start_index=0 --mnemonic_language=english --chain=joc --mnemonic="$MNEMONIC" --keystore_password="$(cat "$PWD/validator_keys/password.txt")" --withdrawal_address="$VALIDATOR_WITHDRAWAL_ADDRESS" --regular-withdrawal
-
-      else
-        echo 'Error: Could not generate or extract mnemonic.'
-        exit 1
-      fi
-      # --- END: verbatim from guide, Step 2-2 ---------------------------------
-
-      unset MNEMONIC
-      clear
-      set -o history
-      success "Mnemonic cleared from shell memory; terminal cleared."
-
-      info "Verifying generated files..."
-      shopt -s nullglob
-      local keystores=("$KEYS_DIR"/keystore-*.json)
-      local deposits=("$KEYS_DIR"/deposit_data-*.json)
-      shopt -u nullglob
-      [[ ${#keystores[@]} -ge 1 ]] || die "keystore-*.json not found in $KEYS_DIR"
-      [[ ${#deposits[@]} -ge 1 ]] || die "deposit_data-*.json not found in $KEYS_DIR"
-      [[ -f "$KEYS_DIR/password.txt" ]] || die "password.txt not found in $KEYS_DIR"
-      chmod 600 "$KEYS_DIR"/*.json "$KEYS_DIR/password.txt"
-      success "Found: $(basename "${keystores[0]}"), $(basename "${deposits[0]}"), password.txt (all chmod 600)."
-    fi
+    # ethstaker-deposit-cli chain config — deposit-cli hardcodes
+    # --chain=joc regardless of NETWORK, per the guide's Step 2-2 command.
+    "$JOCV_ROOT/deposit-cli" generate \
+      --keys-dir "$KEYS_DIR" \
+      --withdrawal-address "$VALIDATOR_WITHDRAWAL_ADDRESS"
 
     info "Step 2-6: importing the validator key into the Lighthouse Validator Client..."
-    # --- BEGIN: adapted from guide, Step 2-6 (added a second -v mount so
-    #     --testnet-dir=/data/config still resolves, now that consensus
-    #     config lives under networks/$NETWORK/cl instead of data/config) ---
-    docker run --rm \
-      -v "$(pwd):/data" \
-      -v "$cl_dir:/data/config:ro" \
-      sigp/lighthouse:v7.0.1 \
-      lighthouse account_manager validator import \
-      --datadir=/data \
-      --directory=/data/validator_keys \
-      --password-file=/data/validator_keys/password.txt \
-      --testnet-dir=/data/config \
-      --reuse-password
-    # --- END: adapted from guide, Step 2-6 -----------------------------------
+    "$JOCV_ROOT/deposit-cli" import \
+      --keys-dir "$KEYS_DIR" \
+      --testnet-dir "$cl_dir"
     success "Validator key imported."
   fi
 

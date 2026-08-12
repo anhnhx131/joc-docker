@@ -1,0 +1,273 @@
+#!/usr/bin/env bash
+# deposit-cli — key ceremony helper for the JOC validator (guide Step 2-2,
+# Step 2-6). Wraps two things:
+#   generate  gulabs/gu-ethstaker-deposit-cli   (mnemonic + keystore + deposit_data)
+#   import    sigp/lighthouse                   (hand the keystore to Lighthouse)
+#
+# Deliberately kept OUT of jocv, in its own small file:
+#   - These docker commands are the part of this project most likely to
+#     need independent tweaking (image version/tag, extra deposit-cli
+#     flags, a future non-Lighthouse CL client's import command). Keeping
+#     them here means changing them never touches jocv's larger lifecycle
+#     logic (install/up/down/logs/update), and vice versa.
+#   - This is also the single most security-sensitive part of the whole
+#     project (mnemonic handling). A small, standalone, single-purpose file
+#     is easier to read start-to-finish and diff against the guide than a
+#     block buried inside a 1000+ line CLI.
+#
+# IMPORTANT — what this script does NOT do: it never submits a deposit
+# transaction to any network, never calls any RPC/API, and never uploads
+# anything anywhere. It only runs local `docker run` commands against your
+# own disk. `generate` prints the resulting deposit data so YOU can copy it
+# and submit it yourself, exactly as the guide's Step 3-1 describes
+# (Launchpad or whatever JBF/admin's process is) — that submission step is
+# intentionally not automated here.
+#
+# Called automatically by `jocv init`, but fully standalone — copy this one
+# file anywhere with docker installed and run it directly if you want to
+# generate keys on a separate/offline machine from the one that runs the
+# Validator Client.
+set -euo pipefail
+
+# --- logging -------------------------------------------------------------
+# Intentionally duplicated from jocv rather than sourced: see header above
+# — this file stays single-file/portable on purpose, runnable outside a
+# jocv checkout.
+COLOR_RED=$'\033[31m'
+COLOR_GREEN=$'\033[32m'
+COLOR_YELLOW=$'\033[33m'
+COLOR_RESET=$'\033[0m'
+
+info()    { printf '%s\n' "[INFO] $*" >&2; }
+success() { printf '%s[OK]%s %s\n' "$COLOR_GREEN" "$COLOR_RESET" "$*" >&2; }
+warn()    { printf '%s[WARN]%s %s\n' "$COLOR_YELLOW" "$COLOR_RESET" "$*" >&2; }
+error()   { printf '%s[ERROR]%s %s\n' "$COLOR_RED" "$COLOR_RESET" "$*" >&2; }
+shout()   { printf '%s%s%s\n' "$COLOR_RED" "$*" "$COLOR_RESET" >&2; }
+die()     { error "$*"; exit 1; }
+
+is_valid_eth_address() {
+  [[ "${1:-}" =~ ^0x[0-9a-fA-F]{40}$ ]]
+}
+
+# Unsets MNEMONIC on any exit path (error, Ctrl-C, normal return) so it
+# never lingers in shell memory longer than necessary. Does not touch disk.
+install_secret_cleanup_trap() {
+  # shellcheck disable=SC2064
+  trap 'unset MNEMONIC 2>/dev/null || true' EXIT INT TERM
+}
+
+# Prints the deposit data file's path and raw contents to stdout so it's
+# easy to copy/paste. This is public data (pubkey, signature, withdrawal
+# credentials) — not a secret — but it's still your responsibility to
+# submit it through whatever channel the guide/JBF describes (Step 3-1).
+print_deposit_summary() {
+  local deposit_file="$1"
+  {
+    echo
+    info "Deposit data file (guide Step 3-1 — you submit this yourself, this"
+    info "script does not):"
+    echo "  $deposit_file"
+    echo
+    info "Contents, for copy/paste:"
+    echo "----------------------------------------------------------------"
+  } >&2
+  cat "$deposit_file"
+  {
+    echo
+    echo "----------------------------------------------------------------"
+  } >&2
+}
+
+usage() {
+  cat <<'EOF'
+deposit-cli — key ceremony helper for the JOC validator (guide Step 2-2, 2-6)
+
+Usage:
+  deposit-cli generate --keys-dir <dir> --withdrawal-address <0x...>
+      Generate a mnemonic + validator keystore + deposit_data-*.json under
+      <dir>. Prints the mnemonic ONCE (never written to disk) and requires
+      typing 'yes' to confirm you saved it offline before continuing.
+      Prints the resulting deposit data at the end for you to copy.
+      Safe to re-run: skips generation if keys already exist in <dir>.
+
+  deposit-cli import --keys-dir <dir> --testnet-dir <cl-config-dir> [--datadir <dir>]
+      Import an already-generated keystore into a local Lighthouse
+      Validator Client datadir (guide Step 2-6). <datadir> defaults to the
+      parent of <keys-dir>. Local only.
+
+Neither command talks to any network beyond pulling docker images if not
+already cached, and neither submits a deposit transaction anywhere.
+
+Called automatically by 'jocv init' for ROLE=validator/all — see
+README.md. Safe to run standalone, including on a separate machine from
+the one running the Validator Client.
+EOF
+}
+
+cmd_generate() {
+  local keys_dir="" withdrawal_address=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --keys-dir) keys_dir="${2:?--keys-dir needs a value}"; shift 2 ;;
+      --withdrawal-address) withdrawal_address="${2:?--withdrawal-address needs a value}"; shift 2 ;;
+      *) die "Unknown argument: $1 (run 'deposit-cli' with no arguments for usage)" ;;
+    esac
+  done
+  [[ -n "$keys_dir" ]] || die "Usage: deposit-cli generate --keys-dir <dir> --withdrawal-address <0x...>"
+  is_valid_eth_address "$withdrawal_address" \
+    || die "Invalid --withdrawal-address '$withdrawal_address'. Expected 0x + 40 hex characters."
+
+  mkdir -p "$keys_dir"
+
+  shopt -s nullglob
+  local existing_keystores=("$keys_dir"/keystore-*.json)
+  local existing_deposits=("$keys_dir"/deposit_data-*.json)
+  shopt -u nullglob
+
+  if [[ ${#existing_keystores[@]} -gt 0 && ${#existing_deposits[@]} -gt 0 ]]; then
+    warn "Validator keys already exist in $keys_dir — skipping generation."
+    warn "To regenerate, remove keystore-*.json, deposit_data-*.json and"
+    warn "password.txt yourself first (this invalidates any previously"
+    warn "submitted deposit data), then re-run."
+    print_deposit_summary "${existing_deposits[0]}"
+    return 0
+  fi
+
+  info "Generating password, mnemonic, validator keys and deposit data..."
+
+  local password_file="$keys_dir/password.txt"
+  if [[ ! -f "$password_file" ]]; then
+    ( umask 077 && openssl rand -base64 24 | tr -d '\n' > "$password_file" )
+    chmod 600 "$password_file"
+    success "Generated $password_file (chmod 600, >12 characters)."
+  else
+    warn "$password_file already exists, reusing it."
+    chmod 600 "$password_file"
+  fi
+
+  # --- Security: no shell history, no lingering shell var, for the mnemonic. ---
+  set +o history
+  install_secret_cleanup_trap
+
+  info "Running ethstaker-deposit-cli generate-mnemonic (guide Step 2-2, verbatim command)..."
+  # --- BEGIN: verbatim from guide, Step 2-2 -------------------------------
+  echo 'Generating mnemonic with ethstaker-deposit-cli..'
+
+  MNEMONIC=$(
+    docker run --rm -v "$keys_dir:/app/validator_keys" gulabs/gu-ethstaker-deposit-cli:v0.0.1-gubuild.0 --non_interactive --ignore_connectivity generate-mnemonic --mnemonic_language=english
+  )
+  if [ -n "$MNEMONIC" ]; then
+      echo -e "\033[32m✅ Mnemonic generated successfully.\033[0m"
+  else
+      echo -e "\033[31m❌ Failed to generate mnemonic.\033[0m"
+      exit 1
+  fi
+  # --- END: verbatim from guide, Step 2-2 ---------------------------------
+
+  echo >&2
+  echo "================================================================" >&2
+  shout " MNEMONIC — write this down OFFLINE now. It will only be shown once:"
+  echo >&2
+  echo " $MNEMONIC" >&2
+  echo >&2
+  echo "================================================================" >&2
+  echo >&2
+  warn "It is never written to disk, never logged, and never sent over the network."
+  read -r -p "Have you securely written down this mnemonic OFFLINE? Type 'yes' to continue: " CONFIRM_SAVED
+  if [[ "$CONFIRM_SAVED" != "yes" ]]; then
+    die "Aborted: mnemonic was not confirmed as saved. No keys were generated."
+  fi
+
+  info "Running ethstaker-deposit-cli existing-mnemonic (guide Step 2-2, verbatim command)..."
+  # --- BEGIN: verbatim from guide, Step 2-2 -------------------------------
+  if [ -n "$MNEMONIC" ]; then
+    echo 'Creating validator keys with existing mnemonic..'
+
+    docker run --rm -v "$keys_dir:/app/validator_keys" gulabs/gu-ethstaker-deposit-cli:v0.0.1-gubuild.0 --non_interactive --ignore_connectivity existing-mnemonic --num_validators=1 --validator_start_index=0 --mnemonic_language=english --chain=joc --mnemonic="$MNEMONIC" --keystore_password="$(cat "$keys_dir/password.txt")" --withdrawal_address="$withdrawal_address" --regular-withdrawal
+
+  else
+    echo 'Error: Could not generate or extract mnemonic.'
+    exit 1
+  fi
+  # --- END: verbatim from guide, Step 2-2 ---------------------------------
+
+  unset MNEMONIC
+  clear
+  set -o history
+  success "Mnemonic cleared from shell memory; terminal cleared."
+
+  info "Verifying generated files..."
+  shopt -s nullglob
+  local keystores=("$keys_dir"/keystore-*.json)
+  local deposits=("$keys_dir"/deposit_data-*.json)
+  shopt -u nullglob
+  [[ ${#keystores[@]} -ge 1 ]] || die "keystore-*.json not found in $keys_dir"
+  [[ ${#deposits[@]} -ge 1 ]] || die "deposit_data-*.json not found in $keys_dir"
+  [[ -f "$keys_dir/password.txt" ]] || die "password.txt not found in $keys_dir"
+  chmod 600 "$keys_dir"/*.json "$keys_dir/password.txt"
+  success "Found: $(basename "${keystores[0]}"), $(basename "${deposits[0]}"), password.txt (all chmod 600)."
+
+  print_deposit_summary "${deposits[0]}"
+
+  shout "=================================================================="
+  shout "CONFIDENTIAL — do not share with ANYONE, including JBF/admin/BCCloud staff:"
+  shout "  - the mnemonic (already cleared from this terminal, was never written to disk)"
+  shout "  - $keys_dir/keystore-*.json"
+  shout "  - $keys_dir/password.txt"
+  shout "=================================================================="
+}
+
+cmd_import() {
+  local keys_dir="" testnet_dir="" datadir=""
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --keys-dir) keys_dir="${2:?--keys-dir needs a value}"; shift 2 ;;
+      --testnet-dir) testnet_dir="${2:?--testnet-dir needs a value}"; shift 2 ;;
+      --datadir) datadir="${2:?--datadir needs a value}"; shift 2 ;;
+      *) die "Unknown argument: $1 (run 'deposit-cli' with no arguments for usage)" ;;
+    esac
+  done
+  [[ -n "$keys_dir" ]] || die "Usage: deposit-cli import --keys-dir <dir> --testnet-dir <cl-config-dir> [--datadir <dir>]"
+  [[ -n "$testnet_dir" ]] || die "Usage: deposit-cli import --keys-dir <dir> --testnet-dir <cl-config-dir> [--datadir <dir>]"
+  [[ -f "$keys_dir/password.txt" ]] || die "$keys_dir/password.txt not found. Run 'deposit-cli generate' first."
+  [[ -d "$testnet_dir" ]] || die "--testnet-dir '$testnet_dir' does not exist."
+
+  datadir="${datadir:-$(cd "$keys_dir/.." && pwd)}"
+
+  info "Importing the validator key into the Lighthouse Validator Client (guide Step 2-6)..."
+  # --- BEGIN: adapted from guide, Step 2-6 (an extra -v mount so
+  #     --testnet-dir=/data/config resolves to wherever the consensus
+  #     config actually lives on the host — e.g. networks/<network>/cl —
+  #     instead of the guide's data/config. Same flags/values otherwise.) --
+  docker run --rm \
+    -v "$datadir:/data" \
+    -v "$testnet_dir:/data/config:ro" \
+    sigp/lighthouse:v7.0.1 \
+    lighthouse account_manager validator import \
+    --datadir=/data \
+    --directory=/data/validator_keys \
+    --password-file=/data/validator_keys/password.txt \
+    --testnet-dir=/data/config \
+    --reuse-password
+  # --- END: adapted from guide, Step 2-6 -----------------------------------
+  success "Validator key imported into $datadir/validators."
+}
+
+main() {
+  local cmd="${1:-}"
+  [[ $# -gt 0 ]] && shift || true
+  case "$cmd" in
+    generate) cmd_generate "$@" ;;
+    import)   cmd_import "$@" ;;
+    -h | --help | help | "")
+      usage
+      ;;
+    *)
+      echo "Unknown command: $cmd" >&2
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
