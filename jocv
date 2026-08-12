@@ -1,8 +1,16 @@
 #!/usr/bin/env bash
-# jocv — CLI for running a JOC (Japan Open Chain) node (validator, plain
-# el-cl node, or both) on infrastructure you control, as opposed to the
-# parts done through the BCCloud web UI. See README.md for the full
-# picture, GETTING-STARTED.md for a quick walkthrough.
+# jocv — CLI for running a JOC (Japan Open Chain) PoSA Validator Client on
+# infrastructure you control, as opposed to the parts done through the
+# BCCloud web UI. See README.md for the full picture, GETTING-STARTED.md
+# for a quick walkthrough.
+#
+# Validator-only right now (guide Option 2) — this used to also support
+# self-hosting an Execution + Consensus Client (ROLE=el-cl/all, guide
+# Option 3, never documented by the official guide). Removed rather than
+# carried forward half-finished: it was this project's own best-effort,
+# never guide-verified, and not something anyone should trust in
+# production. See git history (ROLE=el-cl/all, geth.yml,
+# lighthouse-cl-only.yml) if/when that gets properly rebuilt.
 #
 # Single file, on purpose (modeled after eth-docker's `ethd`): bash
 # `source` doesn't create real scoping anyway — a sourced file's
@@ -38,9 +46,8 @@ ENV_EXAMPLE="$JOCV_ROOT/.env.example"
 # currently supports. Adding a new entry here is a deliberate, reviewed
 # decision — not something any command should infer on its own.
 SUPPORTED_NETWORKS=(mainnet testnet sandbox)
-SUPPORTED_EL_CLIENTS=(geth)          # planned, not yet supported: nethermind, besu
 SUPPORTED_CL_CLIENTS=(lighthouse)    # planned, not yet supported: prysm
-SUPPORTED_ROLES=(validator el-cl all)
+SUPPORTED_ROLES=(validator)          # el-cl/all removed — see header comment
 
 # =============================================================================
 # 2. Helpers
@@ -129,56 +136,24 @@ _list_contains() {
 }
 
 is_supported_network()   { _list_contains "${1:-}" "${SUPPORTED_NETWORKS[@]}"; }
-is_supported_el_client() { _list_contains "${1:-}" "${SUPPORTED_EL_CLIENTS[@]}"; }
 is_supported_cl_client() { _list_contains "${1:-}" "${SUPPORTED_CL_CLIENTS[@]}"; }
 is_supported_role()      { _list_contains "${1:-}" "${SUPPORTED_ROLES[@]}"; }
 
 # Compose file(s) to load for a given ROLE, ':'-joined for COMPOSE_FILE.
 # One file per client/role (eth-docker convention — see e.g.
 # https://github.com/ethstaker/eth-docker/blob/main/lighthouse-vc-only.yml),
-# rather than one file with docker-compose 'profiles:' filtering — this
-# way a service you're not using is never even parsed by docker compose,
-# so e.g. geth.yml's required EL_CLIENT_IMAGE/EL_NETWORK_ID can never
-# break `docker compose up` for ROLE=validator, which never loads it.
-#   validator -> only the Validator Client (guide Option 2: connects to an
-#                external Consensus Client, e.g. BCCloud)
-#   el-cl     -> only Execution + Consensus clients, no validator duties
-#   all       -> everything, self-hosted (guide Option 3)
+# rather than one file with docker-compose 'profiles:' filtering. Only one
+# role exists right now (see jocv's header comment for why), but this
+# stays a function/single-source-of-truth rather than a hardcoded
+# constant so re-adding a role later is additive here, not a rewrite.
 compose_files_for_role() {
   case "${1:-}" in
     validator) echo "lighthouse-vc-only.yml" ;;
-    el-cl)     echo "geth.yml:lighthouse-cl-only.yml" ;;
-    all)       echo "geth.yml:lighthouse-cl-only.yml:lighthouse-vc-only.yml" ;;
     *)         return 1 ;;
   esac
 }
 
-# Enforces that EL_CLIENT_IMAGE / EL_NETWORK_ID are set before starting a
-# role that includes the execution/beacon services, with a friendlier
-# message than docker compose's own. geth.yml also declares these as
-# required (':?') at the compose level now — safe to do since geth.yml is
-# only ever loaded for ROLE=el-cl/all (see compose_files_for_role()) — so
-# this check is a nicer error message layered on top, not a load-bearing
-# workaround.
-check_el_config() {
-  local missing=()
-  [[ -n "${EL_CLIENT_IMAGE:-}" ]] || missing+=("EL_CLIENT_IMAGE")
-  [[ -n "${EL_NETWORK_ID:-}" ]]   || missing+=("EL_NETWORK_ID")
-  if [[ ${#missing[@]} -gt 0 ]]; then
-    error "Missing required .env value(s) for ROLE=${ROLE:-<unset>}: ${missing[*]}"
-    cat >&2 <<EOF
-
-There is no default for these — this repo does not know which Geth
-version/network ID JOC requires (the official guide does not document
-Option 3). Get the correct values from JBF/admin, set them in .env, then
-retry. See networks/README.md.
-EOF
-    return 1
-  fi
-}
-
 network_dir()        { echo "$NETWORKS_DIR/$1"; }
-network_el_dir()     { echo "$NETWORKS_DIR/$1/el"; }
 network_cl_dir()     { echo "$NETWORKS_DIR/$1/cl"; }
 
 # set_env_var KEY VALUE — create or update a KEY=VALUE line in $ENV_FILE.
@@ -196,19 +171,10 @@ set_env_var() {
   mv "$tmp" "$ENV_FILE"
 }
 
-# Plain-text bootnode list -> single comma-joined string for a --bootnodes /
-# --boot-nodes flag. One entry per line; blank lines and '#' comments
-# ignored. Not real YAML parsing on purpose — see networks/README.md.
-read_bootnodes_file() {
-  local f="$1"
-  [[ -f "$f" ]] || { echo ""; return 0; }
-  grep -vE '^[[:space:]]*(#|$)' "$f" | paste -sd, -
-}
-
 # Loads .env into the current shell's environment (auto-export), so
-# commands can read NETWORK/ROLE/EL_CLIENT/CL_CLIENT/etc. Assumes .env is
-# trusted content that jocv itself wrote — same trust model docker
-# compose already applies to .env.
+# commands can read NETWORK/ROLE/CL_CLIENT/etc. Assumes .env is trusted
+# content that jocv itself wrote — same trust model docker compose
+# already applies to .env.
 load_env() {
   [[ -f "$ENV_FILE" ]] || return 1
   set -a
@@ -323,16 +289,11 @@ cmd_install() {
 }
 
 # --- jocv init -----------------------------------------------------------------
-# Set up this node. Covers, depending on the chosen ROLE:
-#   ROLE=validator (guide Option 2, Recommended) — Step 2-1, 2-2, 2-6, 2-7,
-#     2-8: directories, consensus config, password/mnemonic/keys/deposit
-#     data, import into Lighthouse, start the Validator Client via
-#     docker compose, print the deposit data path + confidentiality warning.
-#   ROLE=el-cl — Execution + Consensus clients only, no validator keys at
-#     all. NOT covered by the official guide (Option 3: "Organizations
-#     selecting Option 3 should contact us directly") — see the big
-#     warning below and networks/README.md.
-#   ROLE=all — everything above, combined.
+# Set up this node (guide Option 2, Recommended — the only role this CLI
+# supports): Step 2-1, 2-2, 2-6, 2-7, 2-8 — directories, consensus config,
+# password/mnemonic/keys/deposit data, import into Lighthouse, start the
+# Validator Client via docker compose, print the deposit data path +
+# confidentiality warning.
 #
 # Steps 2-3, 2-4, 2-5 (Transaction Cluster, Validator Cluster, Consensus
 # HTTP API on BCCloud) are manual UI steps on BCCloud and are NOT performed
@@ -341,17 +302,15 @@ cmd_install() {
 # Safe to re-run: steps that already have output on disk are skipped
 # rather than silently overwritten.
 cmd_init() {
-  info "=== jocv init — JOC PoSA node setup ==="
+  info "=== jocv init — JOC PoSA Validator Client setup ==="
 
   check_docker
-  command -v openssl >/dev/null 2>&1 \
-    || die "openssl is required (used to generate the keystore password and, for el-cl/all roles, the execution<->consensus JWT secret)."
 
-  # --- Network + role selection ---------------------------------------------
+  # --- Network selection ---------------------------------------------
   if [[ -f "$ENV_FILE" ]]; then
     load_env
-    info "Existing .env found — reusing NETWORK=${NETWORK:-<unset>}, ROLE=${ROLE:-<unset>}."
-    info "(To change network or role, edit .env by hand or start a fresh checkout, then re-run.)"
+    info "Existing .env found — reusing NETWORK=${NETWORK:-<unset>}."
+    info "(To change network, edit .env by hand or start a fresh checkout, then re-run.)"
   fi
 
   NETWORK="${NETWORK:-}"
@@ -363,65 +322,45 @@ cmd_init() {
   fi
   export NETWORK
 
-  ROLE="${ROLE:-}"
-  if ! is_supported_role "$ROLE"; then
-    cat >&2 <<EOF
-Supported roles:
-  validator - only the Validator Client, connecting to an external
-              Consensus Client (guide Option 2, Recommended)
-  el-cl     - only Execution + Consensus clients, no validator duties
-  all       - Execution + Consensus + Validator, self-hosted (guide
-              Option 3 — NOT documented in the official guide)
-EOF
-    read -r -p "Which role? [validator]: " ROLE
-    ROLE="${ROLE:-validator}"
-    is_supported_role "$ROLE" || die "Unsupported role '$ROLE'. Supported: ${SUPPORTED_ROLES[*]}"
-  fi
+  # Only one ROLE exists right now (see jocv's header comment) — still
+  # validated against SUPPORTED_ROLES rather than hardcoded, so an old
+  # .env with a since-removed ROLE value fails loudly instead of silently
+  # doing the wrong thing.
+  ROLE="${ROLE:-validator}"
+  is_supported_role "$ROLE" \
+    || die "Unsupported ROLE '$ROLE' in $ENV_FILE. Only 'validator' is supported right now."
   export ROLE
 
-  EL_CLIENT="${EL_CLIENT:-geth}"
   CL_CLIENT="${CL_CLIENT:-lighthouse}"
-  is_supported_el_client "$EL_CLIENT" \
-    || die "Unsupported EL_CLIENT '$EL_CLIENT'. Currently supported: ${SUPPORTED_EL_CLIENTS[*]}."
   is_supported_cl_client "$CL_CLIENT" \
     || die "Unsupported CL_CLIENT '$CL_CLIENT'. Currently supported: ${SUPPORTED_CL_CLIENTS[*]}."
 
   local compose_file
   compose_file="$(compose_files_for_role "$ROLE")"
-  success "Network: $NETWORK | Role: $ROLE (compose file(s): $compose_file) | EL: $EL_CLIENT | CL: $CL_CLIENT"
+  success "Network: $NETWORK | compose file(s): $compose_file | CL: $CL_CLIENT"
 
-  local needs_validator=false needs_el_cl=false
-  [[ "$ROLE" == "validator" || "$ROLE" == "all" ]] && needs_validator=true
-  [[ "$ROLE" == "el-cl" || "$ROLE" == "all" ]] && needs_el_cl=true
-
-  local el_dir cl_dir
-  el_dir="$(network_el_dir "$NETWORK")"
+  local cl_dir
   cl_dir="$(network_cl_dir "$NETWORK")"
 
   # --- Step 2-1: directory structure ----------------------------------------
   info "Preparing data directory structure..."
-  if [[ "$needs_validator" == true ]]; then
-    if [[ -d "$KEYS_DIR" ]] && [[ -n "$(ls -A "$KEYS_DIR" 2>/dev/null || true)" ]]; then
-      warn "$KEYS_DIR already exists and is not empty."
-      if ! confirm "Continue and reuse the existing directory (nothing will be deleted)?"; then
-        info "To start over instead: 'jocv destroy' (permanently deletes"
-        info "keys/deposit data/.env — only if you're sure you don't need them)."
-        die "Aborted by user. Nothing was changed."
-      fi
+  if [[ -d "$KEYS_DIR" ]] && [[ -n "$(ls -A "$KEYS_DIR" 2>/dev/null || true)" ]]; then
+    warn "$KEYS_DIR already exists and is not empty."
+    if ! confirm "Continue and reuse the existing directory (nothing will be deleted)?"; then
+      info "To start over instead: 'jocv destroy' (permanently deletes"
+      info "keys/deposit data/.env — only if you're sure you don't need them)."
+      die "Aborted by user. Nothing was changed."
     fi
-    mkdir -p "$KEYS_DIR"
   fi
-  [[ "$needs_el_cl" == true ]] && mkdir -p "$DATA_DIR/execution" "$DATA_DIR/beacon"
+  mkdir -p "$KEYS_DIR"
   success "Directory structure ready under $DATA_DIR"
 
   cd "$DATA_DIR"
 
   # --- Step 2-1 (cont'd): consensus config files ----------------------------
-  # (needed for validator/all AND el-cl-only, since the beacon node reads it)
-  if [[ "$needs_validator" == true || "$needs_el_cl" == true ]]; then
-    info "Checking consensus config files under $cl_dir ..."
-    if [[ ! -f "$cl_dir/config.yaml" || ! -f "$cl_dir/deposit_contract_block.txt" ]]; then
-      cat >&2 <<EOF
+  info "Checking consensus config files under $cl_dir ..."
+  if [[ ! -f "$cl_dir/config.yaml" || ! -f "$cl_dir/deposit_contract_block.txt" ]]; then
+    cat >&2 <<EOF
 
 Missing consensus config for network '$NETWORK'. This CLI does not
 auto-download it: the JOC page is an HTML docs page, not a raw file URL.
@@ -435,113 +374,57 @@ Please do this manually:
   4. Re-run: jocv init
 
 EOF
-      die "Consensus config files not found for network '$NETWORK'."
-    fi
-    success "config.yaml and deposit_contract_block.txt present in $cl_dir"
-    info "config.yaml SHA-256: $(sha256_of "$cl_dir/config.yaml")"
-    info "If this came from a git-committed copy rather than a fresh manual"
-    info "download, double check it still matches the official source."
+    die "Consensus config files not found for network '$NETWORK'."
   fi
+  success "config.yaml and deposit_contract_block.txt present in $cl_dir"
+  info "config.yaml SHA-256: $(sha256_of "$cl_dir/config.yaml")"
+  info "If this came from a git-committed copy rather than a fresh manual"
+  info "download, double check it still matches the official source."
 
-  # --- Execution + Consensus client setup (ROLE=el-cl or all) ---------------
-  # NOT covered by the official guide — Option 3 is undocumented there.
-  if [[ "$needs_el_cl" == true ]]; then
-    shout "=================================================================="
-    shout " ROLE includes a self-hosted Execution/Consensus Client (guide"
-    shout " Option 3). The official guide does NOT document this — it says"
-    shout " 'Organizations selecting Option 3 should contact us directly.'"
-    shout " Everything below is this CLI's best-effort convention, not"
-    shout " guide-verbatim. Verify all values with JBF/admin. See"
-    shout " networks/README.md."
-    shout "=================================================================="
-
-    [[ -f "$el_dir/genesis.json" ]] \
-      || die "Missing $el_dir/genesis.json. Get it from JBF/admin and place it there."
-
-    if [[ -z "${EL_CLIENT_IMAGE:-}" ]]; then
-      read -r -p "Geth docker image to use for EL_CLIENT_IMAGE (e.g. ethereum/client-go:vX.Y.Z — ask JBF/admin): " EL_CLIENT_IMAGE
-      [[ -n "$EL_CLIENT_IMAGE" ]] || die "EL_CLIENT_IMAGE is required for role '$ROLE'."
-    fi
-    if [[ -z "${EL_NETWORK_ID:-}" ]]; then
-      read -r -p "EL_NETWORK_ID for '$NETWORK' (ask JBF/admin): " EL_NETWORK_ID
-      [[ -n "$EL_NETWORK_ID" ]] || die "EL_NETWORK_ID is required for role '$ROLE'."
-    fi
-    export EL_CLIENT_IMAGE EL_NETWORK_ID
-
-    local el_bootnodes cl_bootnodes
-    el_bootnodes="$(read_bootnodes_file "$el_dir/bootnodes.txt")"
-    cl_bootnodes="$(read_bootnodes_file "$cl_dir/bootnodes.txt")"
-    [[ -n "$el_bootnodes" ]] || warn "No EL bootnodes at $el_dir/bootnodes.txt — execution client may not find peers."
-    [[ -n "$cl_bootnodes" ]] || warn "No CL bootnodes at $cl_dir/bootnodes.txt — beacon node may not find peers."
-
-    local jwt_file="$DATA_DIR/jwt.hex"
-    if [[ ! -f "$jwt_file" ]]; then
-      ( umask 077 && openssl rand -hex 32 > "$jwt_file" )
-      chmod 600 "$jwt_file"
-      success "Generated $jwt_file (shared secret between execution and beacon)."
-    else
-      warn "$jwt_file already exists, reusing it."
-    fi
-
-    if [[ ! -d "$DATA_DIR/execution/geth" ]]; then
-      info "Initializing Geth datadir from $el_dir/genesis.json (one-time)..."
-      docker run --rm \
-        -v "$DATA_DIR/execution:/data" \
-        -v "$el_dir:/network:ro" \
-        "$EL_CLIENT_IMAGE" \
-        init --datadir=/data /network/genesis.json
-      success "Geth datadir initialized."
-    else
-      info "Geth datadir already initialized, skipping."
-    fi
-  fi
-
-  # --- Validator setup (ROLE=validator or all) — Guide Step 2-2, 2-6 -------
+  # --- Validator setup — Guide Step 2-2, 2-6 -------
   # The actual key-generation/import docker commands live in
   # staking-deposit-cli.yml + staking-deposit-cli/, not here — see staking-deposit-cli.yml's
   # header comment for why it's kept separate
   # (independent tweaking, most security-sensitive part of this project).
   # This block only collects the withdrawal address and invokes compose;
   # jocv never touches the mnemonic itself.
-  if [[ "$needs_validator" == true ]]; then
-    info "Validator setup: withdrawal address"
-    if [[ -n "${VALIDATOR_WITHDRAWAL_ADDRESS:-}" ]] && is_valid_eth_address "${VALIDATOR_WITHDRAWAL_ADDRESS:-}"; then
-      info "Using VALIDATOR_WITHDRAWAL_ADDRESS from environment: $VALIDATOR_WITHDRAWAL_ADDRESS"
-    else
-      while true; do
-        read -r -p "Enter the receiver withdrawal address obtained in Step 1-1 (0x...): " VALIDATOR_WITHDRAWAL_ADDRESS
-        if is_valid_eth_address "$VALIDATOR_WITHDRAWAL_ADDRESS"; then
-          break
-        fi
-        error "Invalid address. Expected 0x followed by 40 hex characters (42 chars total)."
-      done
-    fi
-    export VALIDATOR_WITHDRAWAL_ADDRESS
-    # staking-deposit-cli.yml's `${WITHDRAWAL_ADDRESS:?...}` is resolved by
-    # docker compose while it PARSES the compose file — from the calling
-    # shell's environment / .env, never from a `run -e` flag (that only
-    # overrides the container's runtime env, applied after parsing
-    # succeeds). So this must be a real exported var named exactly
-    # WITHDRAWAL_ADDRESS, not just passed via -e below.
-    export WITHDRAWAL_ADDRESS="$VALIDATOR_WITHDRAWAL_ADDRESS"
-
-    # All three networks (mainnet/testnet/sandbox) share the same
-    # ethstaker-deposit-cli chain config — the generate-entrypoint hardcodes
-    # --chain=joc regardless of NETWORK, per the guide's Step 2-2 command.
-    # NETWORK is already exported above, so staking-deposit-cli.yml's
-    # ${NETWORK} volume interpolation (validator-import) resolves correctly.
-    docker compose -f "$JOCV_ROOT/staking-deposit-cli.yml" run --rm \
-      -e HOST_UID="$(id -u)" \
-      -e HOST_GID="$(id -g)" \
-      deposit-generate
-
-    info "Step 2-6: importing the validator key into the Lighthouse Validator Client..."
-    docker compose -f "$JOCV_ROOT/staking-deposit-cli.yml" run --rm \
-      -e HOST_UID="$(id -u)" \
-      -e HOST_GID="$(id -g)" \
-      validator-import
-    success "Validator key imported."
+  info "Validator setup: withdrawal address"
+  if [[ -n "${VALIDATOR_WITHDRAWAL_ADDRESS:-}" ]] && is_valid_eth_address "${VALIDATOR_WITHDRAWAL_ADDRESS:-}"; then
+    info "Using VALIDATOR_WITHDRAWAL_ADDRESS from environment: $VALIDATOR_WITHDRAWAL_ADDRESS"
+  else
+    while true; do
+      read -r -p "Enter the receiver withdrawal address obtained in Step 1-1 (0x...): " VALIDATOR_WITHDRAWAL_ADDRESS
+      if is_valid_eth_address "$VALIDATOR_WITHDRAWAL_ADDRESS"; then
+        break
+      fi
+      error "Invalid address. Expected 0x followed by 40 hex characters (42 chars total)."
+    done
   fi
+  export VALIDATOR_WITHDRAWAL_ADDRESS
+  # staking-deposit-cli.yml's `${WITHDRAWAL_ADDRESS:?...}` is resolved by
+  # docker compose while it PARSES the compose file — from the calling
+  # shell's environment / .env, never from a `run -e` flag (that only
+  # overrides the container's runtime env, applied after parsing
+  # succeeds). So this must be a real exported var named exactly
+  # WITHDRAWAL_ADDRESS, not just passed via -e below.
+  export WITHDRAWAL_ADDRESS="$VALIDATOR_WITHDRAWAL_ADDRESS"
+
+  # All three networks (mainnet/testnet/sandbox) share the same
+  # ethstaker-deposit-cli chain config — the generate-entrypoint hardcodes
+  # --chain=joc regardless of NETWORK, per the guide's Step 2-2 command.
+  # NETWORK is already exported above, so staking-deposit-cli.yml's
+  # ${NETWORK} volume interpolation (validator-import) resolves correctly.
+  docker compose -f "$JOCV_ROOT/staking-deposit-cli.yml" run --rm \
+    -e HOST_UID="$(id -u)" \
+    -e HOST_GID="$(id -g)" \
+    deposit-generate
+
+  info "Step 2-6: importing the validator key into the Lighthouse Validator Client..."
+  docker compose -f "$JOCV_ROOT/staking-deposit-cli.yml" run --rm \
+    -e HOST_UID="$(id -u)" \
+    -e HOST_GID="$(id -g)" \
+    validator-import
+  success "Validator key imported."
 
   # --- .env ------------------------------------------------------------------
   info "Preparing .env..."
@@ -552,68 +435,37 @@ EOF
   set_env_var "NETWORK" "$NETWORK"
   set_env_var "ROLE" "$ROLE"
   set_env_var "COMPOSE_FILE" "$compose_file"
-  set_env_var "EL_CLIENT" "$EL_CLIENT"
   set_env_var "CL_CLIENT" "$CL_CLIENT"
+  set_env_var "WITHDRAWAL_ADDRESS" "$VALIDATOR_WITHDRAWAL_ADDRESS"
 
-  if [[ "$needs_validator" == true ]]; then
-    set_env_var "WITHDRAWAL_ADDRESS" "$VALIDATOR_WITHDRAWAL_ADDRESS"
-  fi
-
-  if [[ "$needs_el_cl" == true ]]; then
-    set_env_var "EL_CLIENT_IMAGE" "$EL_CLIENT_IMAGE"
-    set_env_var "EL_NETWORK_ID" "$EL_NETWORK_ID"
-    set_env_var "EL_BOOTNODES" "$el_bootnodes"
-    set_env_var "CL_BOOTNODES" "$cl_bootnodes"
-  fi
-
-  if [[ "$ROLE" == "all" ]]; then
-    # Self-hosted beacon node is reachable on the compose network by service
-    # name. Standard Lighthouse HTTP API port (5052) — verify this is what
-    # your beacon service actually exposes if you change its flags.
-    set_env_var "BEACON_URL" "http://beacon:5052"
-    info "BEACON_URL auto-set to the local beacon service (http://beacon:5052)."
-  elif [[ "$ROLE" == "validator" ]] && ! grep -q '^BEACON_URL=http://beacon:5052$' "$ENV_FILE"; then
+  if ! grep -q '^BEACON_URL=http://beacon:5052$' "$ENV_FILE"; then
     warn "BEACON_URL is a safe local placeholder until you run:"
     warn "  jocv validator config beacon http://<bccloud-node-ip>:3500"
     warn "once Step 2-3~2-5 are done on BCCloud."
   fi
 
   # --- Start -------------------------------------------------------------------
-  if [[ "$needs_el_cl" == true ]]; then
-    load_env
-    check_el_config || die "Fix the above and re-run 'jocv init' (or 'jocv up')."
-  fi
-
-  info "Starting service(s) for role '$ROLE' via docker compose..."
+  info "Starting the Validator Client via docker compose..."
   ( cd "$JOCV_ROOT" && docker compose up -d )
   success "Started. Check status with: jocv status"
 
   # --- Final summary -----------------------------------------------------------
   echo >&2
   echo "================================================================" >&2
-  success "Setup complete for role '$ROLE' on network '$NETWORK'."
+  success "Setup complete on network '$NETWORK'."
 
-  if [[ "$needs_validator" == true ]]; then
-    shopt -s nullglob
-    local deposit_files=("$KEYS_DIR"/deposit_data-*.json)
-    shopt -u nullglob
-    local deposit_file="${deposit_files[0]:-<not found>}"
-    echo >&2
-    info "Deposit data file — you will submit this to Launchpad in Step 3-1:"
-    echo "  $deposit_file" >&2
-    echo >&2
-    shout "CONFIDENTIAL — do not share with ANYONE, including JBF/admin/BCCloud staff:"
-    shout "  - the mnemonic (already cleared from this terminal, was never written to disk)"
-    shout "  - $KEYS_DIR/keystore-*.json"
-    shout "  - $KEYS_DIR/password.txt"
-  fi
-  if [[ "$needs_el_cl" == true ]]; then
-    echo >&2
-    warn "Execution/Consensus client setup is NOT from the official guide (Option 3"
-    warn "is undocumented there). Confirm sync status and peer count with 'jocv logs'"
-    warn "before trusting this node, and double check genesis/bootnodes/network ID"
-    warn "with JBF/admin."
-  fi
+  shopt -s nullglob
+  local deposit_files=("$KEYS_DIR"/deposit_data-*.json)
+  shopt -u nullglob
+  local deposit_file="${deposit_files[0]:-<not found>}"
+  echo >&2
+  info "Deposit data file — you will submit this to Launchpad in Step 3-1:"
+  echo "  $deposit_file" >&2
+  echo >&2
+  shout "CONFIDENTIAL — do not share with ANYONE, including JBF/admin/BCCloud staff:"
+  shout "  - the mnemonic (already cleared from this terminal, was never written to disk)"
+  shout "  - $KEYS_DIR/keystore-*.json"
+  shout "  - $KEYS_DIR/password.txt"
   echo "================================================================" >&2
 }
 
@@ -635,9 +487,6 @@ VALIDATOR_CONFIG_KEYS=(address beacon)
 cmd_validator_config() {
   [[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found. Run 'jocv init' first."
   load_env
-  local role="${ROLE:-validator}"
-  [[ "$role" == "validator" || "$role" == "all" ]] \
-    || die "ROLE=$role runs no Validator Client — there is nothing here to view/set."
 
   local key="${1:-}" value="${2:-}"
 
@@ -668,25 +517,19 @@ cmd_validator_config() {
   fi
 }
 
-# Prints one key's current value + any relevant caveat. Guide references:
-# 'address' is Step 2-7's --suggested-fee-recipient; 'beacon' is the
-# Consensus Client the Validator Client connects to (Step 2-7 initial
-# connection / Step 4-1 endpoint changes).
+# Prints one key's current value. Guide references: 'address' is Step
+# 2-7's --suggested-fee-recipient; 'beacon' is the Consensus Client the
+# Validator Client connects to (Step 2-7 initial connection / Step 4-1
+# endpoint changes).
 _validator_config_show() {
   case "$1" in
     address) echo "address = ${WITHDRAWAL_ADDRESS:-<unset>}" >&2 ;;
-    beacon)
-      echo "beacon  = ${BEACON_URL:-<unset>}" >&2
-      [[ "${ROLE:-validator}" == "all" ]] \
-        && info "ROLE=all: auto-managed, normally points at the local 'beacon' service."
-      ;;
+    beacon)  echo "beacon  = ${BEACON_URL:-<unset>}" >&2 ;;
   esac
 }
 
 # Validates + writes one key's new value to .env. This is the only place
-# that needs to know a given key's validation rule / ROLE-specific
-# caveat — cmd_validator_config's ROLE=el-cl guard above already covers
-# every key, so no per-key el-cl check is needed here.
+# that needs to know a given key's validation rule.
 _validator_config_set() {
   local key="$1" value="$2"
   case "$key" in
@@ -697,12 +540,6 @@ _validator_config_set() {
       ;;
     beacon)
       is_valid_url "$value" || die "Invalid URL: '$value' (expected http(s)://host[:port][/path])"
-      if [[ "${ROLE:-validator}" == "all" ]]; then
-        warn "ROLE=all: BEACON_URL is normally auto-managed to point at the local"
-        warn "'beacon' service (http://beacon:5052). Overriding it here means your"
-        warn "Validator Client will stop talking to your own beacon node."
-        confirm "Set beacon to '$value' anyway?" || die "Aborted. Nothing was changed."
-      fi
       set_env_var "BEACON_URL" "$value"
       success "beacon updated in $ENV_FILE."
       ;;
@@ -718,9 +555,6 @@ _validator_config_set() {
 cmd_validator_deposit_data() {
   [[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found. Run 'jocv init' first."
   load_env
-  local role="${ROLE:-validator}"
-  [[ "$role" == "validator" || "$role" == "all" ]] \
-    || die "ROLE=$role runs no Validator Client — there is no deposit data."
 
   shopt -s nullglob
   local deposit_files=("$KEYS_DIR"/deposit_data-*.json)
@@ -739,19 +573,12 @@ cmd_validator_deposit_data() {
 }
 
 # --- jocv status -------------------------------------------------------------------
-# Check node health for whichever service(s) the current ROLE runs. Per
-# Guide Step 3-2 for the validator container; the execution/beacon checks
-# are this project's own addition (not from the guide, which doesn't cover
-# self-hosting them).
+# Check the validator container's health, per guide Step 3-2.
 cmd_status() {
   check_docker
   [[ -f "$ENV_FILE" ]] && load_env || true
-  local role="${ROLE:-validator}"
 
-  local services=()
-  [[ "$role" == "validator" || "$role" == "all" ]] && services+=("validator")
-  [[ "$role" == "el-cl" || "$role" == "all" ]] && services+=("execution" "beacon")
-
+  local services=("validator")
   local overall_ok=true svc not_attesting_count
   for svc in "${services[@]}"; do
     echo >&2
@@ -830,9 +657,8 @@ cmd_upgrade() {
   # node, so we can tell you what to do next instead of acting on it.
   local compose_changed
   compose_changed="$(git diff --name-only "HEAD..origin/$branch" -- '*.yml' || true)"
-  local cl_config_changed el_cl_changed
+  local cl_config_changed
   cl_config_changed="$(git diff --name-only "HEAD..origin/$branch" -- 'networks/*/cl/config.yaml' || true)"
-  el_cl_changed="$(git diff --name-only "HEAD..origin/$branch" -- 'networks/*/el/' || true)"
 
   git pull --ff-only origin "$branch"
   success "Updated to $(git rev-parse --short HEAD)."
@@ -846,29 +672,19 @@ cmd_upgrade() {
     warn "Consensus config changed (likely a new hard fork phase):"
     echo "$cl_config_changed" | sed 's/^/  /' >&2
     warn "Confirm your team verified this against the official JBF/admin"
-    warn "source, then run 'jocv restart' so the validator/beacon"
-    warn "container(s) pick it up (bind-mounted, no rebuild needed)."
-  fi
-  if [[ -n "$el_cl_changed" ]]; then
-    warn "Execution-layer network file(s) changed (genesis/bootnodes):"
-    echo "$el_cl_changed" | sed 's/^/  /' >&2
-    warn "These normally only change for a new network launch, not a routine"
-    warn "hard fork phase. Confirm with JBF/admin before re-running 'jocv init'"
-    warn "or restarting the execution service."
+    warn "source, then run 'jocv restart' so the validator container picks"
+    warn "it up (bind-mounted, no rebuild needed)."
   fi
 }
 
 # --- jocv up -------------------------------------------------------------------------
-# (Re)start whichever service(s) the current ROLE needs, per the current
-# .env (including which compose file(s) COMPOSE_FILE points at).
+# (Re)start the validator service, per the current .env (including which
+# compose file COMPOSE_FILE points at) — also picks up any compose
+# file/.env change (see 'jocv restart' for the difference).
 cmd_up() {
   check_docker
   [[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found. Run 'jocv init' first."
   load_env
-
-  if [[ "${ROLE:-}" == "el-cl" || "${ROLE:-}" == "all" ]]; then
-    check_el_config || die "Fix .env, then retry."
-  fi
 
   ( cd "$JOCV_ROOT" && docker compose up -d )
   success "Up (role: ${ROLE:-<unset>}, compose file(s): ${COMPOSE_FILE:-<unset>}). Check with: jocv status"
@@ -892,47 +708,30 @@ cmd_down() {
   success "Stopped. Start again with: jocv up"
 }
 
-# --- jocv restart [service] -----------------------------------------------------------
-# `docker compose restart` for whichever service(s) the current ROLE
-# runs, or just one if named. Restarts the existing container(s) in
+# --- jocv restart --------------------------------------------------------------------
+# `docker compose restart validator`. Restarts the existing container in
 # place — re-reads any bind-mounted file that changed on disk (e.g.
 # networks/<NETWORK>/cl/config.yaml after a hard fork config update
 # pulled in via 'jocv upgrade' — guide Step 4-1's "sudo docker restart
-# validator"). Does NOT recreate containers: a changed compose file or
+# validator"). Does NOT recreate the container: a changed compose file or
 # .env value needs 'jocv up' instead, not this (see README.md).
 cmd_restart() {
   check_docker
   [[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found. Run 'jocv init' first."
   load_env
-  local role="${ROLE:-validator}"
 
-  local active=()
-  [[ "$role" == "validator" || "$role" == "all" ]] && active+=("validator")
-  [[ "$role" == "el-cl" || "$role" == "all" ]] && active+=("execution" "beacon")
-
-  local service="${1:-}" targets=()
-  if [[ -n "$service" ]]; then
-    _list_contains "$service" "${active[@]}" \
-      || die "Service '$service' is not active for ROLE=$role. Active: ${active[*]}"
-    targets=("$service")
-  else
-    targets=("${active[@]}")
-  fi
-
-  info "Restarting: ${targets[*]}..."
-  ( cd "$JOCV_ROOT" && docker compose restart "${targets[@]}" )
+  info "Restarting: validator..."
+  ( cd "$JOCV_ROOT" && docker compose restart validator )
   success "Done. Check with: jocv status"
 
-  if [[ "$role" == "validator" || "$role" == "all" ]] \
-    && { [[ -z "$service" ]] || [[ "$service" == "validator" ]]; }; then
-    warn "Per the guide: after 5-10 minutes, if 'Not attesting' keeps appearing"
-    warn "for more than 15-20 minutes, the validator is not operating properly."
-  fi
+  warn "Per the guide: after 5-10 minutes, if 'Not attesting' keeps appearing"
+  warn "for more than 15-20 minutes, the validator is not operating properly."
 }
 
 # --- jocv destroy --------------------------------------------------------------------
 # Stop this node's containers AND permanently delete its data (keys,
-# deposit data, execution/consensus chain data) and .env. NOT reversible.
+# deposit data, the Validator Client's own datadir) and .env. NOT
+# reversible.
 #
 # Deliberately a separate command from 'jocv down' rather than a
 # '--data'/'--all' flag on it — no accidentally-omitted flag can turn a
@@ -947,8 +746,8 @@ cmd_destroy() {
   shout " DELETE:"
   [[ -d "$KEYS_DIR" ]] && shout "   - $KEYS_DIR"
   shout "     (mnemonic-derived keystore, deposit_data-*.json, password.txt)"
-  [[ -d "$DATA_DIR" ]] && shout "   - all of $DATA_DIR (execution/consensus chain data, jwt.hex)"
-  [[ -f "$ENV_FILE" ]] && shout "   - $ENV_FILE (network/role/withdrawal address settings)"
+  [[ -d "$DATA_DIR" ]] && shout "   - all of $DATA_DIR (the Validator Client's own datadir)"
+  [[ -f "$ENV_FILE" ]] && shout "   - $ENV_FILE (network/withdrawal address settings)"
   shout ""
   shout " If deposit_data-*.json was already submitted to Launchpad for this"
   shout " validator, deleting its keystore/mnemonic means you can NEVER"
@@ -970,30 +769,14 @@ cmd_destroy() {
   success "Removed $DATA_DIR and $ENV_FILE. Run 'jocv init' to start fresh."
 }
 
-# --- jocv logs [service] ---------------------------------------------------------------
-# Follow a service's logs. For a one-shot health check across all active
-# services instead, use 'jocv status'.
+# --- jocv logs ---------------------------------------------------------------------
+# Follow the validator container's logs. For a one-shot health check
+# instead, use 'jocv status'.
 cmd_logs() {
   check_docker
   [[ -f "$ENV_FILE" ]] && load_env || true
-  local role="${ROLE:-validator}"
 
-  local active=()
-  [[ "$role" == "validator" || "$role" == "all" ]] && active+=("validator")
-  [[ "$role" == "el-cl" || "$role" == "all" ]] && active+=("execution" "beacon")
-
-  local service="${1:-}"
-  if [[ -z "$service" ]]; then
-    if [[ ${#active[@]} -eq 1 ]]; then
-      service="${active[0]}"
-    else
-      error "Multiple services are active for ROLE=$role: ${active[*]}"
-      echo "Usage: jocv logs <service>   (one of: ${active[*]})" >&2
-      return 1
-    fi
-  fi
-
-  ( cd "$JOCV_ROOT" && docker compose logs -f --tail 100 "$service" )
+  ( cd "$JOCV_ROOT" && docker compose logs -f --tail 100 validator )
 }
 
 # =============================================================================
@@ -1001,32 +784,30 @@ cmd_logs() {
 # =============================================================================
 usage() {
   cat <<'EOF'
-jocv — JOC node CLI (validator / plain node / both)
+jocv — JOC Validator Client CLI
 
 Usage:
   jocv install                     Install Docker (Engine + compose plugin) if missing
   jocv init                        Set up this node: prompts for NETWORK
-                                    (mainnet|testnet|sandbox) and ROLE
-                                    (validator|el-cl|all), then runs the
-                                    matching guide steps (Step 2 for 'validator')
+                                    (mainnet|testnet|sandbox), then runs
+                                    the guide's Step 2
 
   jocv validator config [<key> [<value>]]
                                     View all validator settings, one key, or
                                     set + apply one (keys: address, beacon —
                                     'jocv validator config' with no args
-                                    lists all of them; validator/all only)
+                                    lists all of them)
   jocv validator deposit-data      Reprint the deposit_data-*.json path +
                                     contents from 'jocv init' (Step 3-1)
 
-  jocv status                      Check whichever service(s) ROLE runs (Step
-                                    3-2 for the validator container)
-  jocv up                          Start/apply whichever service(s) ROLE needs
-                                    (also picks up compose file/.env changes)
-  jocv down                        Stop them
-  jocv restart [service]           docker compose restart — for a hard fork
+  jocv status                      Check the validator container (Step 3-2)
+  jocv up                          Start/apply the validator service (also
+                                    picks up compose file/.env changes)
+  jocv down                        Stop it
+  jocv restart                     docker compose restart — for a hard fork
                                     config.yaml update (Step 4-1) or similar;
                                     does NOT pick up compose file/.env changes
-  jocv logs [service]              Follow a service's logs (execution|beacon|validator)
+  jocv logs                        Follow the validator container's logs
   jocv destroy                     Stop containers AND PERMANENTLY delete
                                     keys/deposit data/.env (NOT reversible —
                                     separate from 'jocv down' on purpose)
@@ -1036,9 +817,8 @@ Usage:
                                     a new networks/<NETWORK>/cl/config.yaml)
 
 Run 'jocv <command>' with no further arguments for command-specific usage.
-See README.md for the full walkthrough, the ROLE/NETWORK/CLIENT model,
-prerequisites, and links to the manual BCCloud steps this CLI does NOT
-automate.
+See README.md for the full walkthrough, prerequisites, and links to the
+manual BCCloud steps this CLI does NOT automate.
 EOF
 }
 

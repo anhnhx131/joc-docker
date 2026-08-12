@@ -1,8 +1,8 @@
-# Quick start (`ROLE=validator`)
+# Quick start
 
 Fastest path to a running Validator Client (guide Option 2). Any Linux
 box you can SSH into works — EC2, VPS, on-prem, doesn't matter. For
-`el-cl`/`all` or anything not covered here, see [README.md](README.md).
+anything not covered here, see [README.md](README.md).
 
 > Before you start: have your **receiver withdrawal address** (guide Step
 > 1-1) ready, and a private, offline way to write down a mnemonic phrase.
@@ -42,8 +42,8 @@ networks/mainnet/cl/deposit_contract_block.txt
 ./jocv init
 ```
 
-Prompts for network, role (pick `validator`), and your withdrawal
-address, then generates your mnemonic/keys. **The mnemonic is shown once
+Prompts for network and your withdrawal address, then generates your
+mnemonic/keys. **The mnemonic is shown once
 — write it down on paper before typing `yes` to continue.** Never share
 it, the keystore, or `password.txt` with anyone.
 
@@ -82,5 +82,5 @@ deposit-data`.
 - `./jocv logs` / `./jocv down` — day-to-day operation
 - `./jocv destroy` — wipe keys/deposit data/`.env` to start over (irreversible)
 
-Troubleshooting, the full command reference, and the multi-network/role
+Troubleshooting, the full command reference, and the multi-network
 model: [README.md](README.md).

@@ -14,11 +14,15 @@ self-review of what's guide-verbatim vs. inferred) before making changes.
   differs and why). Never silently change a verbatim block — if a flag or
   value needs to change, say so explicitly in a comment and in README's
   "Self-review" section.
-- **`ROLE=validator` is the only guide-verified path.** `el-cl`/`all`
-  correspond to the guide's Option 3, which the guide explicitly does NOT
-  document ("contact us directly") — everything there is this project's
-  own best-effort Geth/Lighthouse convention. Don't blur that distinction;
-  keep the "Option 3 caveat" warnings intact.
+- **`ROLE=validator` is the only role, full stop — no `el-cl`/`all`.**
+  Self-hosting your own Execution + Consensus Client (the guide's Option
+  3, which the guide explicitly does NOT document — "contact us
+  directly") used to exist here as `ROLE=el-cl`/`all`; it was removed
+  (see README's Self-review) rather than kept half-finished/unverified.
+  Don't quietly re-add it — if it comes back, it needs the same
+  "everything here is this project's own best-effort convention, not
+  guide-verified" caveat treatment the old Option 3 section had, not a
+  silent merge back into the guide-verified path.
 - **Security hygiene around the mnemonic is non-negotiable**: never write
   it to disk/log/network, `set +o history` around it, no `set -x` nearby,
   explicit typed confirmation (`yes`/`delete`, not just `y`) before any
@@ -50,20 +54,22 @@ self-review of what's guide-verbatim vs. inferred) before making changes.
     project doesn't expose and the guide doesn't document. Only the
     *structure* (tools-profile compose service + dedicated entrypoint
     script) is borrowed from eth-docker here, not the mechanism.
-- **Compose files, one per client** (`lighthouse-vc-only.yml`, `geth.yml`,
-  `lighthouse-cl-only.yml`), merged via `COMPOSE_FILE` (colon-joined,
-  managed by `jocv`'s `compose_files_for_role()`) — not one file with
-  `profiles:`. A service not in use must never even be parsed, so it can
-  use compose-native required-variable syntax (`${VAR:?msg}`) safely.
-- **`networks/<mainnet|testnet|sandbox>/{el,cl}/`** holds public,
-  non-secret network parameters (genesis, bootnodes, consensus config) —
-  meant to be git-committed so operators get updates via `git pull`. Never
-  put anything secret there. `data/` and `.env` are git-ignored and must
-  stay that way.
-- Keep the `SUPPORTED_NETWORKS`/`SUPPORTED_EL_CLIENTS`/`SUPPORTED_CL_CLIENTS`/
-  `SUPPORTED_ROLES` allow-lists as the single source of truth — adding an
-  entry is a deliberate, reviewed decision, not something a command should
-  infer.
+- **Compose files, one per client** — just `lighthouse-vc-only.yml` right
+  now, selected via `COMPOSE_FILE` (managed by `jocv`'s
+  `compose_files_for_role()`) — not one file with `profiles:`. Keep this
+  as a function/allow-list-driven single source of truth rather than a
+  hardcoded constant, even with one entry, so adding a client later is
+  additive. A service not in use must never even be parsed, so a future
+  addition can use compose-native required-variable syntax (`${VAR:?msg}`)
+  safely.
+- **`networks/<mainnet|testnet|sandbox>/cl/`** holds public, non-secret
+  network parameters (genesis, consensus config) — meant to be
+  git-committed so operators get updates via `git pull`. Never put
+  anything secret there. `data/` and `.env` are git-ignored and must stay
+  that way.
+- Keep the `SUPPORTED_NETWORKS`/`SUPPORTED_CL_CLIENTS`/`SUPPORTED_ROLES`
+  allow-lists as the single source of truth — adding an entry is a
+  deliberate, reviewed decision, not something a command should infer.
 - Idempotency matters: re-running `jocv init` must never silently overwrite
   or delete existing keys/`.env`/data. Prefer "detect + ask" over
   "detect + skip silently" or "detect + overwrite".
@@ -72,12 +78,20 @@ self-review of what's guide-verbatim vs. inferred) before making changes.
 
 This CLI runs `docker compose up/down/restart` and deletes local
 directories. **Do not run those live subcommands (`jocv up`, `down`,
-`reset`, or raw `docker compose up/down/restart`) against a real,
-already-deployed checkout** — a past session caused a real incident where
-testing in a second checkout stopped a live validator container, because
-both directories shared the same basename and neither compose file has an
-explicit project `name:`, so they defaulted to the same Docker Compose
-project and the same `container_name:`-pinned containers.
+`restart`, `destroy`, or raw `docker compose up/down/restart`) against a
+real, already-deployed checkout** — this has caused real incidents twice
+now: once when testing in a second checkout stopped a live validator
+container (both directories shared the same basename and neither compose
+file has an explicit project `name:`, so they defaulted to the same
+Docker Compose project and the same `container_name:`-pinned containers),
+and once when `jocv restart` was run with no arguments to "just check the
+usage/dispatch," not realizing the no-argument case is the real
+restart-everything path, not a no-op or a help screen. **Before running
+any `jocv` subcommand you haven't fully read yet against a checkout that
+might be live, run `docker ps` first and think about what the no-argument
+/ default-path behavior actually does** — "just testing the CLI surface"
+is not a safe assumption for a command whose default behavior does
+something real.
 
 - When verifying compose changes, use `docker compose config` (read-only,
   parse-only) — never `up`/`down`/`restart` — unless you are certain the
@@ -98,7 +112,6 @@ project and the same `container_name:`-pinned containers.
   "Verify this yourself", and a "Self-review" list of everything that's
   inferred/added beyond the guide (keep this updated when you add anything
   non-guide-verbatim).
-- `GETTING-STARTED.md` — short, eth-docker-QuickStart-style walkthrough,
-  `ROLE=validator` only.
-- `networks/README.md` — what goes under `networks/`, where it comes from,
-  the plain-text `bootnodes.txt` format.
+- `GETTING-STARTED.md` — short, eth-docker-QuickStart-style walkthrough.
+- `networks/README.md` — what goes under `networks/` and where it comes
+  from.

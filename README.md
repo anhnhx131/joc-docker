@@ -1,8 +1,8 @@
 # joc-docker (`jocv`)
 
-A small bash-only CLI for running a **JOC (Japan Open Chain)** node — as a
-validator, a plain network-connected node, or both — on infrastructure you
-control, as opposed to the parts done through the BCCloud web UI.
+A small bash-only CLI for running a **JOC (Japan Open Chain) PoSA
+Validator Client** on infrastructure you control, as opposed to the parts
+done through the BCCloud web UI.
 
 > **Just want to try it on a real EC2 box?** See
 > [GETTING-STARTED.md](GETTING-STARTED.md) for a hands-on, copy-pasteable
@@ -10,49 +10,36 @@ control, as opposed to the parts done through the BCCloud web UI.
 > prompt looks like → BCCloud steps → verify). This README is the
 > reference doc (architecture, guide fidelity, security model).
 
-Its foundation (`ROLE=validator`) is a thin wrapper around the official
-*"JOC Tokyo Hard Fork Validator Step-by-Step Guide"*, Option 2 (Recommended
-Configuration): every command it runs there is either taken **verbatim**
-from the guide, or a direct, literal translation of a guide command into
-`docker compose` — see [Verify this yourself](#verify-this-yourself) and
+This is a thin wrapper around the official *"JOC Tokyo Hard Fork
+Validator Step-by-Step Guide"*, Option 2 (Recommended Configuration):
+every command it runs is either taken **verbatim** from the guide, or a
+direct, literal translation of a guide command into `docker compose` —
+see [Verify this yourself](#verify-this-yourself) and
 [Self-review](#self-review--what-i-added-beyond-the-guide).
 
-Everything needed to also run your own Execution + Consensus client
-(`ROLE=el-cl` / `all`) is **new territory the guide does not document** —
-it explicitly says *"Organizations selecting Option 3 should contact us
-directly."* That part is flagged loudly throughout this README and the
-code; treat it as unverified until confirmed with JBF/admin.
+**Validator-only right now.** This project used to also support
+self-hosting your own Execution + Consensus Client (the guide's Option
+3, which the guide itself never documents — *"Organizations selecting
+Option 3 should contact us directly"*). That support was removed rather
+than carried forward half-finished — it was this project's own
+best-effort convention, never guide-verified, and not something to trust
+in production. See [Self-review](#self-review--what-i-added-beyond-the-guide)
+if/when that gets properly rebuilt.
 
-## Three axes of configuration
+## Configuration
 
-`jocv` is built around three independent choices, all set once in `.env`
-(`jocv init` walks you through them):
+`jocv` is built around a couple of independent choices, set once in
+`.env` (`jocv init` walks you through them):
 
-| Axis | Values | What it controls |
+| Setting | Values | What it controls |
 | --- | --- | --- |
-| `ROLE` | `validator` \| `el-cl` \| `all` | Which service(s) run: only the Validator Client (connects to an external Consensus Client, e.g. BCCloud); only Execution+Consensus (a plain node, no validator duties); or all three, self-hosted. |
-| `NETWORK` | `mainnet` \| `testnet` \| `sandbox` | Which JOC network's config/genesis/bootnodes to use — see `networks/<NETWORK>/{el,cl}/` and [networks/README.md](networks/README.md). |
-| `EL_CLIENT` / `CL_CLIENT` | `geth` / `lighthouse` (only options today) | Which client runs each layer. Structured so `nethermind`, `besu`, `prysm`, etc. can be added later without changing this shape — but only `geth`+`lighthouse` are implemented right now; any other value is rejected with a clear "not supported yet" error (`jocv`: `SUPPORTED_EL_CLIENTS` / `SUPPORTED_CL_CLIENTS`). |
+| `NETWORK` | `mainnet` \| `testnet` \| `sandbox` | Which JOC network's config/genesis to use — see `networks/<NETWORK>/cl/` and [networks/README.md](networks/README.md). |
+| `CL_CLIENT` | `lighthouse` (only option today) | Which Validator Client software runs. Structured so `prysm` etc. can be added later without changing this shape — but only `lighthouse` is implemented right now; any other value is rejected with a clear "not supported yet" error (`jocv`: `SUPPORTED_CL_CLIENTS`). |
+| `ROLE` | `validator` (only option) | Kept as a variable/allow-list (`SUPPORTED_ROLES`) rather than hardcoded, so a future `el-cl`/`all` role (see above) is additive to add back, not a rewrite. Not something you choose today. |
 
-`ROLE` maps to which compose file(s) get loaded, via `COMPOSE_FILE` in
-`.env` (docker compose reads this natively — one small compose file per
-client/role, [eth-docker](https://github.com/ethstaker/eth-docker)'s
-convention, e.g. its
-[`lighthouse-vc-only.yml`](https://github.com/ethstaker/eth-docker/blob/main/lighthouse-vc-only.yml)):
-
-| `ROLE` | `COMPOSE_FILE` | Services started | Guide option |
-| --- | --- | --- | --- |
-| `validator` | `lighthouse-vc-only.yml` | `validator` only | Option 2 (Recommended) — what the guide's Step 2 documents |
-| `el-cl` | `geth.yml:lighthouse-cl-only.yml` | `execution` + `beacon` | Undocumented in the guide (closest to Option 3, minus the validator) |
-| `all` | `geth.yml:lighthouse-cl-only.yml:lighthouse-vc-only.yml` | `execution` + `beacon` + `validator` | Option 3 — guide says "contact us directly" |
-
-A service you're not using is never even parsed by docker compose — its
-file just isn't in `COMPOSE_FILE`. This was previously done with a single
-`docker-compose.yml` and [docker compose
-profiles](https://docs.docker.com/compose/how-tos/profiles/) instead;
-switched to match eth-docker's approach once client choice (`EL_CLIENT`/
-`CL_CLIENT`) becomes real (multiple files per layer composes more cleanly
-than one file with more and more profile combinations).
+`COMPOSE_FILE` in `.env` is set automatically (`compose_files_for_role()`)
+to `lighthouse-vc-only.yml` — docker compose reads `COMPOSE_FILE`
+natively, no `-f` flags needed.
 
 ## What this is NOT
 
@@ -70,11 +57,6 @@ of scope on purpose:
 | Step 3-3 | Stop the old txNode (coordinate with JBF) |
 | Step 5 | Shut down the old Geth/Clef environment, retrieve JOC linked to Clef |
 
-These only apply to `ROLE=validator`/`all` (you need BCCloud's Consensus
-HTTP API only when your Validator Client talks to a Consensus Client it
-doesn't run itself). `ROLE=el-cl` doesn't involve BCCloud or Launchpad at
-all — it's just a node joining the network.
-
 If your organization uses the guide's **Option 1 (Internal Validator)** —
 Execution, Consensus, *and* Validator Client all run on BCCloud — this CLI
 does not apply to you at all. Follow "Option 1: Setup for Internal
@@ -86,16 +68,16 @@ machine.
 If you've used [eth-docker](https://github.com/ethstaker/eth-docker)'s
 `ethd install|config|up|update`, `jocv` follows the same rough shape but
 much smaller — no OS provisioning, no `.env` schema migration engine, and
-(for now) exactly one client per layer:
+exactly one client:
 
 | `ethd` | `jocv` equivalent | Why it's smaller here |
 | --- | --- | --- |
 | `install` (installs Docker, OS packages, tunes the OS, adds user to `docker` group) | `jocv install` | Installs Docker Engine + compose plugin only (official apt repo on Ubuntu/Debian, best-effort dnf repo elsewhere), and adds your user to the `docker` group. Deliberately does **not** tune the OS (swappiness, noatime, chrony/NTP) or install unrelated packages — a tool that's about to handle your mnemonic shouldn't also be doing broad root-level OS provisioning. Shows every `sudo` command before running it and asks for confirmation once. Idempotent: no-ops if Docker is already installed and working. |
-| One `.yml` file per client (e.g. `lighthouse-vc-only.yml`), merged via `COMPOSE_FILE` | Same — `lighthouse-vc-only.yml`, `geth.yml`, `lighthouse-cl-only.yml`, merged via `COMPOSE_FILE` per `ROLE` | This one isn't simplified, just scoped down: eth-docker has ~5 EL × ~6 CL × addons; `jocv` has exactly the files today's `SUPPORTED_EL_CLIENTS`/`SUPPORTED_CL_CLIENTS` need. |
-| `config` (interactive `.env` wizard + schema migration across versions) | `jocv init` prompts (network/role) + `jocv validator config` | A handful of variables, not dozens — no schema to migrate. |
+| One `.yml` file per client, merged via `COMPOSE_FILE` | Same idea — just one file, `lighthouse-vc-only.yml`, right now | eth-docker has ~5 EL × ~6 CL × addons; `jocv` has exactly the one file `SUPPORTED_CL_CLIENTS` needs today. |
+| `config` (interactive `.env` wizard + schema migration across versions) | `jocv init` prompts (network) + `jocv validator config` | A handful of variables, not dozens — no schema to migrate. |
 | `up` | `jocv up` | Same idea: `docker compose up -d`, respecting `COMPOSE_FILE`. |
 | `down` / `stop` | `jocv down` | Same idea, with a guide-specific reminder not to stop while awaiting activation (Step 3-2). |
-| `logs` | `jocv logs [service]` | Same idea: `docker compose logs -f`. Asks which service if more than one is active. |
+| `logs` | `jocv logs` | Same idea: `docker compose logs -f`. |
 | `update` (`git pull`, `.env` migration, image rebuild, restart, all in one) | `jocv upgrade` | Only does the `git pull` part, and only if the working tree is clean and the pull is a fast-forward. Never migrates `.env`, never restarts anything, never applies a new config by itself — it just tells you what changed and which command to run next (e.g. `jocv restart` after a `config.yaml` update). |
 
 ## Prerequisites
@@ -106,24 +88,18 @@ much smaller — no OS provisioning, no `.env` schema migration engine, and
   running, with the `docker compose` v2 plugin available — run
   `jocv install` if you don't have it yet (Ubuntu/Debian and, best-effort,
   Amazon Linux/RHEL-family).
-- `bash`, `openssl`, `sed`, `paste` (all standard on any Linux/macOS box —
-  no `yq`/Python/Node dependency, by design).
-- For `ROLE=validator`/`all`: you've completed guide Step 1-1 (receiver
-  withdrawal address) and Step 1-2 (joined the JOC PoSA network on
-  BCCloud), plus a private, offline-capable way to record a mnemonic
-  phrase — see [Security](#security).
-- For `ROLE=el-cl`/`all`: `networks/<NETWORK>/el/genesis.json` in place,
-  and a confirmed Geth image + network ID + bootnodes from JBF/admin (see
-  [Option 3 caveat](#option-3-caveat-el-cl-roles) below) — there is no
-  guide to copy these from.
+- `bash`, `sed` (all standard on any Linux/macOS box — no `yq`/Python/Node
+  dependency, by design).
+- You've completed guide Step 1-1 (receiver withdrawal address) and Step
+  1-2 (joined the JOC PoSA network on BCCloud), plus a private,
+  offline-capable way to record a mnemonic phrase — see
+  [Security](#security).
 
 ## Quick start
 
-### Just a validator (guide Option 2 — most validator companies want this)
-
 ```bash
 ./jocv install       # if Docker isn't installed yet (safe to skip if it is)
-./jocv init          # prompts: NETWORK=mainnet, ROLE=validator, then guide
+./jocv init          # prompts: NETWORK=mainnet, then guide
                       # Step 2-1, 2-2, 2-6, 2-7, 2-8
 
 # --- meanwhile, on BCCloud (manual, see table above): -----------------
@@ -139,22 +115,8 @@ much smaller — no OS provisioning, no `.env` schema migration engine, and
 ```
 
 After that, submit `data/validator_keys/deposit_data-xxx.json` to
-Launchpad (guide Step 3-1) — `jocv init` prints its exact path at the end.
-
-### Just a node, no validator duties
-
-```bash
-NETWORK=mainnet ROLE=el-cl ./jocv init
-./jocv logs execution   # or: ./jocv logs beacon
-./jocv status
-```
-
-### Both (guide Option 3 — self-hosted end to end)
-
-```bash
-NETWORK=mainnet ROLE=all ./jocv init
-./jocv status
-```
+Launchpad (guide Step 3-1) — `jocv init` prints its exact path at the
+end, and `jocv validator deposit-data` reprints it anytime after.
 
 ## Commands
 
@@ -171,54 +133,39 @@ beyond Docker itself — see [Compared to eth-docker's `ethd`](#compared-to-eth-
 
 ### `jocv init`
 
-Prompts for `NETWORK` and `ROLE` (or reads them from the environment /
-existing `.env`), then runs whichever of the following apply:
+Prompts for `NETWORK` (or reads it from the environment / existing
+`.env`), then:
 
-**Always:**
 1. Checks Docker is installed and running.
-2. For `validator`/`all`: creates `data/validator_keys/`. For `el-cl`/`all`:
-   creates `data/execution/`, `data/beacon/`.
+2. Creates `data/validator_keys/`.
 3. Checks `networks/<NETWORK>/cl/{config.yaml,deposit_contract_block.txt}`
    exist (see [networks/README.md](networks/README.md) — manual download
    or git-committed by your team), prints their SHA-256.
-
-**`el-cl` / `all` only** (see [Option 3 caveat](#option-3-caveat-el-cl-roles)):
-4. Checks `networks/<NETWORK>/el/genesis.json` exists.
-5. Prompts for `EL_CLIENT_IMAGE` and `EL_NETWORK_ID` if not already set.
-6. Reads `networks/<NETWORK>/{el,cl}/bootnodes.txt` into `EL_BOOTNODES` /
-   `CL_BOOTNODES`.
-7. Generates `data/jwt.hex` (execution↔consensus shared secret), `chmod 600`.
-8. Runs `geth init` against the genesis file once (skipped if already done).
-
-**`validator` / `all` only** (guide Step 2-2, 2-6):
-9. Prompts for your withdrawal address, validated as `0x` + 40 hex chars.
-10. Delegates to [`staking-deposit-cli.yml`](#staking-deposit-cliyml) — a separate,
-    standalone compose file — to actually generate and import the key via
-    `docker compose -f staking-deposit-cli.yml run --rm <service>`. `jocv init`
-    never runs an `ethstaker-deposit-cli`/`lighthouse` docker command
-    itself, and never touches the mnemonic; see
-    `staking-deposit-cli/*-entrypoint.sh` for what happens step by step
-    (password, mnemonic, the guide's two verbatim commands, the mandatory
-    typed `yes` confirmation, then the Step 2-6 Lighthouse import).
-
-**Always, at the end:**
-16. Writes/updates `.env` (`NETWORK`, `ROLE`, `COMPOSE_FILE`, client
-    choices, and whatever the role above collected).
-17. Runs `docker compose up -d`.
-18. For `validator`/`all`: prints the `deposit_data-xxx.json` path (needed
-    for Step 3-1) and a loud confidentiality reminder. For `el-cl`/`all`:
-    reminds you the Execution/Consensus wiring is unverified — check sync
-    status before trusting the node.
+4. Prompts for your withdrawal address, validated as `0x` + 40 hex chars
+   (guide Step 2-2, 2-6). Delegates to
+   [`staking-deposit-cli.yml`](#staking-deposit-cliyml) — a separate,
+   standalone compose file — to actually generate and import the key via
+   `docker compose -f staking-deposit-cli.yml run --rm <service>`. `jocv
+   init` never runs an `ethstaker-deposit-cli`/`lighthouse` docker command
+   itself, and never touches the mnemonic; see
+   `staking-deposit-cli/*-entrypoint.sh` for what happens step by step
+   (password, mnemonic, the guide's two verbatim commands, the mandatory
+   typed `yes` confirmation, then the Step 2-6 Lighthouse import).
+5. Writes/updates `.env` (`NETWORK`, `ROLE`, `COMPOSE_FILE`, `CL_CLIENT`,
+   `WITHDRAWAL_ADDRESS`).
+6. Runs `docker compose up -d`.
+7. Prints the `deposit_data-xxx.json` path (needed for Step 3-1) and a
+   loud confidentiality reminder.
 
 Idempotent throughout: existing keys/config/`.env` are reused rather than
 silently overwritten; you're asked before anything that isn't purely
 additive.
 
-**Changing `NETWORK` or `ROLE` after `init`:** not supported by this CLI.
-Deposit data is submitted against a specific network's deposit contract,
-and the withdrawal address you provide is issued per-network by JBF/admin
-— reusing the same keys across networks isn't meaningful. Start a fresh
-checkout for a different network or role combination.
+**Changing `NETWORK` after `init`:** not supported by this CLI. Deposit
+data is submitted against a specific network's deposit contract, and the
+withdrawal address you provide is issued per-network by JBF/admin —
+reusing the same keys across networks isn't meaningful. Start a fresh
+checkout for a different network.
 
 ### `staking-deposit-cli.yml`
 
@@ -238,10 +185,9 @@ result back to your user — lives in its own script under
 `gulabs/gu-ethstaker-deposit-cli` / `sigp/lighthouse` images. Neither
 image is ever rebuilt: what runs is exactly what JBF/admin published.
 
-`jocv init` calls both services for you automatically for
-`ROLE=validator`/`all` — most people never invoke this directly. It's kept
-as its own compose file + entrypoint scripts, deliberately outside `jocv`,
-for two reasons:
+`jocv init` calls both services for you automatically — most people
+never invoke this directly. It's kept as its own compose file +
+entrypoint scripts, deliberately outside `jocv`, for two reasons:
 
 - It's the part of this project most likely to need independent tweaking
   (image version/tag, extra flags, a future non-Lighthouse import command)
@@ -309,10 +255,8 @@ and the chown-back-to-host-user convention described above.
 ### `jocv validator config [<key> [<value>]]`
 
 Single, extensible entry point for validator-scoped settings, for an
-already-initialized node with `ROLE=validator`/`all` (refuses for
-`ROLE=el-cl` — no Validator Client, nothing to view/set). Doesn't touch
-keys, `NETWORK`, or `ROLE` — those are fixed at `jocv init` time (see
-above).
+already-initialized node. Doesn't touch keys, `NETWORK`, or `ROLE` —
+those are fixed at `jocv init` time (see above).
 
 - `jocv validator config` — prints every known key's current value.
 - `jocv validator config <key>` — prints just that one.
@@ -324,7 +268,7 @@ Known keys today:
 | Key | Env var | Notes |
 | --- | --- | --- |
 | `address` | `WITHDRAWAL_ADDRESS` | Guide Step 2-7's `--suggested-fee-recipient`. |
-| `beacon` | `BEACON_URL` | The Consensus Client the Validator Client connects to — BCCloud in guide Step 2-7, or a new endpoint for a Step 4 hard fork change. For `ROLE=all` it warns first (you're normally pointed at your own local `beacon` service automatically) and asks you to confirm before overriding. |
+| `beacon` | `BEACON_URL` | The Consensus Client the Validator Client connects to — BCCloud in guide Step 2-7, or a new endpoint for a Step 4 hard fork change. |
 
 Adding a future key (e.g. graffiti) is meant to be a small, additive
 change: one more entry in `jocv`'s `VALIDATOR_CONFIG_KEYS` array plus one
@@ -340,28 +284,23 @@ init` (guide Step 3-1) — for whenever you need it again after the
 one-time printout at init time (lost terminal scrollback, submitting from
 a different session, etc.). Public data only (pubkey/signature/withdrawal
 credentials) — never touches the mnemonic, keystore, or password file.
-Refuses for `ROLE=el-cl`.
 
 ### `jocv status`
 
-Checks whichever container(s) the current `ROLE` needs are running, prints
-recent logs for each. For the `validator` container specifically, scans
-for `Not attesting` per the guide's Step 3-2 criteria (persisting 15-20+
-minutes after the first 5-10 minutes is a sign something's wrong). The
-`execution`/`beacon` checks are this project's own addition — the guide
-doesn't cover self-hosting them.
+Checks the `validator` container is running, prints its recent logs, and
+scans them for `Not attesting` per the guide's Step 3-2 criteria
+(persisting 15-20+ minutes after the first 5-10 minutes is a sign
+something's wrong).
 
-### `jocv restart [service]`
+### `jocv restart`
 
-`docker compose restart` for whichever service(s) the current `ROLE`
-runs, or just one if named (`validator`/`execution`/`beacon`). This is
-how you apply a new hard fork phase's `config.yaml` (guide Step 4-1's
-"sudo docker restart validator") — since `beacon`/`validator` have
-`networks/<NETWORK>/cl/` bind-mounted directly as `--testnet-dir`,
-restarting the container is enough for it to pick up a `config.yaml` that
-changed on disk, no copy/rebuild step needed.
+`docker compose restart validator`. This is how you apply a new hard
+fork phase's `config.yaml` (guide Step 4-1's "sudo docker restart
+validator") — since `validator` has `networks/<NETWORK>/cl/` bind-mounted
+directly as `--testnet-dir`, restarting the container is enough for it to
+pick up a `config.yaml` that changed on disk, no copy/rebuild step needed.
 
-**Does not recreate containers** — it will not pick up a changed compose
+**Does not recreate the container** — it will not pick up a changed compose
 file or `.env` value (image, `command:`, `environment:`); that needs
 `jocv up` instead. See [Updating config via git](#updating-config-via-git)
 for the full hard-fork-phase flow.
@@ -402,27 +341,25 @@ hard-fork-phase `config.yaml` update. Named `upgrade` rather than
 
 Shows the incoming commits and asks for confirmation before pulling.
 Afterward it tells you — but does not act on — whether any root-level
-`*.yml` compose file, `networks/*/cl/config.yaml`, or `networks/*/el/**`
-changed, so you follow up deliberately with `jocv up` / `jocv restart` /
-a fresh `jocv init` respectively.
+`*.yml` compose file or `networks/*/cl/config.yaml` changed, so you follow
+up deliberately with `jocv up` / `jocv restart` / a fresh `jocv init`
+respectively.
 
-### `jocv up` / `jocv down` / `jocv logs [service]`
+### `jocv up` / `jocv down` / `jocv logs`
 
-Thin wrappers around `docker compose up -d` / `down` / `logs -f`, scoped
-to whichever service(s) `ROLE` activates. `down` reminds you not to stop
-while awaiting activation (Step 3-2) if a validator is running. `logs`
-asks you to name a service if more than one is active
-(`execution`/`beacon`/`validator`). See [`jocv restart`](#jocv-restart-service)
-above for the difference between `up` (recreates containers, picks up
-compose/`.env` changes) and a plain restart (doesn't).
+Thin wrappers around `docker compose up -d` / `down` / `logs -f` for the
+`validator` service. `down` reminds you not to stop while awaiting
+activation (Step 3-2). See [`jocv restart`](#jocv-restart) above for the
+difference between `up` (recreates the container, picks up compose/`.env`
+changes) and a plain restart (doesn't).
 
 ### `jocv destroy`
 
 For starting over from nothing. Stops this node's containers, then
-**permanently deletes** `data/` (keys, deposit data, execution/consensus
-chain data) and `.env`. Prints exactly what will be removed, asks you to
-confirm the deposit is decommissioned or was never submitted, then
-requires typing `delete` verbatim (a plain `y` isn't enough) before
+**permanently deletes** `data/` (keys, deposit data, the Validator
+Client's own datadir) and `.env`. Prints exactly what will be removed,
+asks you to confirm the deposit is decommissioned or was never submitted,
+then requires typing `delete` verbatim (a plain `y` isn't enough) before
 touching anything. No backup is made — `networks/` (public config) is
 untouched, but everything under `data/` is gone for good. Only run this
 if you're certain you don't need this validator's keys anymore.
@@ -433,34 +370,6 @@ irreversible wipe. For just stopping containers (reversible, data/`.env`
 untouched), use `jocv down` instead — this is what `jocv init` points you
 to when it refuses to overwrite an existing, non-empty
 `data/validator_keys/`.
-
-## Option 3 caveat (`el-cl`/`all` roles)
-
-The official guide's Step 2 only documents `ROLE=validator` (Option 2).
-For `el-cl`/`all`, the guide's only words on the matter are: *"Organizations
-selecting Option 3 should contact us directly."* That means, unlike
-everything else in this CLI, the `execution` and `beacon` services
-(`geth.yml`, `lighthouse-cl-only.yml`) and the corresponding `jocv init`
-steps are **this project's own best-effort convention**, based on
-ordinary Geth/Lighthouse usage — not copied from any JOC/JBF source:
-
-- The Geth image/version (`EL_CLIENT_IMAGE`) and network ID
-  (`EL_NETWORK_ID`) have **no default** — you must get these from
-  JBF/admin. `jocv` will refuse to start these services without them
-  rather than guess.
-- `networks/<NETWORK>/el/genesis.json` and the `bootnodes.txt` files must
-  come from JBF/admin too; there is no guide text describing their exact
-  format for JOC specifically (see [networks/README.md](networks/README.md)
-  for the plain-text convention `jocv` expects).
-- The execution↔consensus JWT auth, ports, and flags
-  (`--authrpc.*`, `--execution-endpoint`, `--http.api`, etc.) follow
-  standard Geth/Lighthouse conventions, which is a reasonable default for
-  *some* Ethereum-family chain, but has not been confirmed against JOC's
-  actual requirements.
-
-**Before relying on `ROLE=el-cl`/`all` for anything real: verify every one
-of these with JBF/admin.** `ROLE=validator` remains the fully
-guide-verified path.
 
 ## Security
 
@@ -474,13 +383,12 @@ guide-verified path.
 - `set -x` is never used anywhere near `MNEMONIC` or `password.txt`.
 - Both `staking-deposit-cli.yml` services run with `network_mode: none` — network
   access is unavailable to the container, not just unused.
-- Every file under `validator_keys/` is `chmod 600`; `data/jwt.hex`
-  (execution↔consensus shared secret) likewise.
+- Every file under `validator_keys/` is `chmod 600`.
 - `data/` and `.env` are git-ignored — never commit them.
-- `networks/**` (`genesis.json`, `config.yaml`, `deposit_contract_block.txt`,
-  `bootnodes.txt`) is **not** git-ignored on purpose — these are public
-  network parameters, not secrets, and this repo supports committing them
-  so nodes can pick up updates with `git pull` (see
+- `networks/**` (`config.yaml`, `deposit_contract_block.txt`) is **not**
+  git-ignored on purpose — these are public network parameters, not
+  secrets, and this repo supports committing them so nodes can pick up
+  updates with `git pull` (see
   [Updating config via git](#updating-config-via-git)). Never confuse this
   directory with `data/validator_keys/` — nothing under `networks/` should
   ever contain a mnemonic, keystore, or password.
@@ -491,9 +399,7 @@ guide-verified path.
   are bind-mounted in at runtime, never baked into a rebuilt image. No
   intermediate image or script touches your key material — this is
   intentional, so you can diff every command this CLI runs against the
-  guide's own text and trust that nothing "extra" is happening. (This
-  guarantee does **not** extend to the `execution`/`beacon` services — see
-  [Option 3 caveat](#option-3-caveat-el-cl-roles).)
+  guide's own text and trust that nothing "extra" is happening.
 - Neither `deposit-generate` nor `validator-import` ever submits anything
   to any network — both only run local commands against your own disk
   (and, per `network_mode: none` above, could not reach a network even if
@@ -532,46 +438,28 @@ Everything marked "verbatim" is copy-pasted from the guide text for
 `ROLE=validator` on `mainnet`. Everything else below was necessarily
 inferred/adapted or added — flagging it explicitly so you can double-check:
 
-- **Multi-role (`ROLE=validator`/`el-cl`/`all`) via docker compose
-  profiles.** Not from the guide, which only documents Option 2
-  (`validator`-equivalent). `el-cl`/`all` correspond to the guide's Option
-  3, which is explicitly undocumented there ("contact us directly") — see
-  [Option 3 caveat](#option-3-caveat-el-cl-roles) for the full list of
-  what's unverified in that path.
-- **Multi-network (`networks/<NETWORK>/{el,cl}/`).** The guide is written
+- **Multi-network (`networks/<NETWORK>/cl/`).** The guide is written
   entirely in terms of one network (mainnet). Extended so `NETWORK=testnet`
-  /`sandbox` select their own config/genesis/bootnodes directory, on the
+  /`sandbox` select their own config/genesis directory, on the
   assumption (not stated in the guide) that these networks follow the same
   file layout as mainnet.
 - **`lighthouse-vc-only.yml` command as a YAML list, not a shell string**,
   for the `validator` service. The guide's Step 2-7 `docker run` block is
   missing a trailing `\` line-continuation on one line; expressing it as a
   YAML list sidesteps that ambiguity entirely while keeping the same flags.
-- **One compose file per client (`lighthouse-vc-only.yml`, `geth.yml`,
-  `lighthouse-cl-only.yml`), merged via `COMPOSE_FILE`, instead of one
-  `docker-compose.yml` filtered by `profiles:`.** Not from the guide —
-  adopted from
+- **One compose file per client (`lighthouse-vc-only.yml`), merged via
+  `COMPOSE_FILE`, instead of one `docker-compose.yml` filtered by
+  `profiles:`.** Not from the guide — adopted from
   [eth-docker](https://github.com/ethstaker/eth-docker/blob/main/lighthouse-vc-only.yml)'s
-  convention. Functionally similar to `profiles:` today (exactly one file
-  per role gets loaded either way), but scales better once `EL_CLIENT`/
-  `CL_CLIENT` support more than one option each, and means a service
-  you're not using is never parsed at all (no more empty-fallback
-  workarounds for required variables like `EL_CLIENT_IMAGE`).
-- **`execution`/`beacon` services entirely.** See
-  [Option 3 caveat](#option-3-caveat-el-cl-roles) — not from the guide at
-  all, best-effort Geth/Lighthouse convention.
-- **Client allow-lists (`EL_CLIENT`/`CL_CLIENT`)** with only `geth`/
-  `lighthouse` implemented today. Structured so `nethermind`, `besu`,
-  `prysm` etc. can be added later; any other value is rejected rather than
-  silently accepted.
-- **Plain-text `bootnodes.txt` instead of real YAML**, despite the `.yaml`
-  naming some teams may expect. Deliberate: this project stays
-  bash-only/no extra dependencies, and a real YAML parser (e.g. `yq`)
-  would be a new dependency just for a list of strings.
+  convention. Only one file exists today, but the pattern (a
+  `compose_files_for_role()` single source of truth) scales to more
+  clients later without a rewrite.
+- **Client allow-list (`CL_CLIENT`)** with only `lighthouse` implemented
+  today. Structured so `prysm` etc. can be added later; any other value
+  is rejected rather than silently accepted.
 - **`BEACON_URL` default placeholder (`http://127.0.0.1:5052`).** Not from
   the guide — a deliberately inert default so `docker compose up -d` can
-  succeed without pointing at anything real. For `ROLE=all` it's instead
-  auto-set to the local `beacon` service.
+  succeed without pointing at anything real.
 - **A second `-v` mount in the Step 2-6 import command** so
   `--testnet-dir=/data/config` still resolves now that consensus config
   lives under `networks/<NETWORK>/cl` instead of `data/config`. Same
@@ -586,7 +474,7 @@ inferred/adapted or added — flagging it explicitly so you can double-check:
   read/audited/run standalone. Originally a single bash script that ran
   `docker run` itself; restructured into a compose file + bind-mounted
   entrypoint scripts, modeled on eth-docker's
-  `staking-deposit-cli.yml`/`docker-entrypoint.sh` convention, so `jocv` never
+  `deposit-cli.yml`/`docker-entrypoint.sh` convention, so `jocv` never
   runs a raw `docker run`/`docker` command and never touches the mnemonic
   at all — it only invokes `docker compose run`. See
   [`staking-deposit-cli.yml`](#staking-deposit-cliyml) above, including
@@ -606,17 +494,16 @@ inferred/adapted or added — flagging it explicitly so you can double-check:
 - **Idempotency guards** (skip key generation if keys already exist; ask
   before overwriting non-empty directories or an existing `.env`). The
   guide is written as a one-time walkthrough and doesn't address re-runs.
-- **`docker compose restart <service>` instead of the guide's `sudo docker
+- **`docker compose restart validator` instead of the guide's `sudo docker
   restart validator`** (Step 4-1). Same effect, works with how this CLI
   manages containers via compose.
 - **`.gitignore` excluding `data/` and `.env`.** A necessary consequence
   of the guide's own confidentiality requirement for the mnemonic/keystore/
   password.
-- **Random password generation** (`openssl rand -base64 24`) and **JWT
-  secret generation** (`openssl rand -hex 32`). The guide specifies the
-  password must be >12 characters but not a method; `openssl rand` is a
-  standard way to satisfy that. The JWT secret isn't mentioned in the
-  guide at all (only relevant to the undocumented `el-cl`/`all` roles).
+- **Random password generation** (`openssl rand -base64 24`, run inside
+  the `deposit-generate` container). The guide specifies the password
+  must be >12 characters but not a method; `openssl rand` is a standard
+  way to satisfy that.
 - **Git-backed config distribution** — a hard fork's new `config.yaml`
   travels the same way as any other file in this repo: your team commits
   it, `jocv upgrade` pulls it (showing the incoming commits first), you
@@ -635,7 +522,6 @@ inferred/adapted or added — flagging it explicitly so you can double-check:
   `curl | sh` convenience script, so every command is visible and
   confirmed before running. Scoped to Docker only — no OS tuning, no
   unrelated packages, unlike `ethd install`.
-
 - **Single-file `jocv`** instead of `scripts/*.sh` + `lib.sh`. Purely
   organizational — same logic, same verbatim-block markers, just one file
   with one `cmd_<name>()` function per subcommand instead of one process
@@ -673,40 +559,48 @@ inferred/adapted or added — flagging it explicitly so you can double-check:
   `--data` flag on `down` — so no accidentally-omitted flag can turn a
   routine stop into a permanent wipe, and the name itself signals
   "irreversible" instead of the more neutral-sounding "reset".
+- **`ROLE=el-cl`/`all` (self-hosted Execution + Consensus Client, the
+  guide's undocumented Option 3) removed entirely** — `geth.yml`,
+  `lighthouse-cl-only.yml`, `networks/*/el/`, `networks/*/cl/bootnodes.txt`,
+  `EL_CLIENT`/`EL_CLIENT_IMAGE`/`EL_NETWORK_ID`/bootnode-reading logic in
+  `jocv`, all deleted. This was never guide-verified (the guide explicitly
+  says it doesn't document Option 3) and was this project's own
+  best-effort Geth/Lighthouse convention — kept only as long as it stayed
+  purely additive to the guide-verified `ROLE=validator` path. Removed
+  rather than left half-finished/undocumented; `SUPPORTED_ROLES` and
+  `compose_files_for_role()` stay structured as allow-lists so re-adding a
+  role later is additive, not a rewrite. See git history for the removed
+  code if/when this gets properly rebuilt.
 
 No multi-validator support, no notifications, no client beyond
-`geth`+`lighthouse` — nothing was added beyond what was asked for.
+`lighthouse` — nothing was added beyond what was asked for.
 
 ## Repository layout
 
 ```
 joc-docker/
-├── jocv                       # the whole CLI — one file, ~1100 lines:
-│                              #   1. paths + SUPPORTED_* allow-lists
-│                              #   2. helpers (logging, confirm(), validators,
-│                              #      env/network utilities, check_el_config())
-│                              #   3. one cmd_<name>() function per subcommand
-│                              #      (install, init, config, beacon_set, status,
-│                              #      update_config, update, up, down, reset, logs)
-│                              #   4. usage() + dispatch (case "$1") at the bottom
-├── staking-deposit-cli.yml             # standalone key ceremony compose file (Step 2-2, 2-6)
-│                              #   deposit-generate: mnemonic + keystore + deposit data
-│                              #   validator-import: hands keystore to a local Lighthouse
-│                              # called by 'jocv init', but runnable on its own
+├── jocv                        # the whole CLI — one file:
+│                                #   1. paths + SUPPORTED_* allow-lists
+│                                #   2. helpers (logging, confirm(), validators,
+│                                #      env/network utilities)
+│                                #   3. one cmd_<name>() function per subcommand
+│                                #      (install, init, validator, status, upgrade,
+│                                #       up, down, restart, destroy, logs)
+│                                #   4. usage() + dispatch (case "$1") at the bottom
+├── staking-deposit-cli.yml     # standalone key ceremony compose file (Step 2-2, 2-6)
+│                                #   deposit-generate: mnemonic + keystore + deposit data
+│                                #   validator-import: hands keystore to a local Lighthouse
+│                                # called by 'jocv init', but runnable on its own
 ├── staking-deposit-cli/
 │   ├── generate-entrypoint.sh  # overrides gu-ethstaker-deposit-cli's entrypoint
 │   └── import-entrypoint.sh    # overrides sigp/lighthouse's entrypoint
-├── lighthouse-vc-only.yml     # 'validator' service — guide-verbatim (Step 2-7)
-├── geth.yml                    # 'execution' service — el-cl/all only, unverified (Option 3 caveat)
-├── lighthouse-cl-only.yml       # 'beacon' service — el-cl/all only, unverified (Option 3 caveat)
-├── .env.example                 # sets COMPOSE_FILE per ROLE — see compose_files_for_role()
+├── lighthouse-vc-only.yml      # 'validator' service — guide-verbatim (Step 2-7)
+├── .env.example                # sets COMPOSE_FILE — see compose_files_for_role()
 └── networks/
     ├── README.md
     └── {mainnet,testnet,sandbox}/
-        ├── el/                        # genesis.json, bootnodes.txt (el-cl/all roles only)
         └── cl/
-            ├── config.yaml / deposit_contract_block.txt / bootnodes.txt
-            └── phases/<phase>/config.yaml   # per hard-fork-phase configs (Step 4)
+            └── config.yaml / deposit_contract_block.txt / genesis.ssz
 ```
 
 Why one file instead of `scripts/*.sh`: bash `source` doesn't create real
