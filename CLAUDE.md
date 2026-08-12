@@ -24,18 +24,31 @@ self-review of what's guide-verbatim vs. inferred) before making changes.
   explicit typed confirmation (`yes`/`delete`, not just `y`) before any
   step that shows a secret once or deletes key material irreversibly,
   `chmod 600` on every key/secret file.
-- **Two files, deliberately separate — don't merge them back together:**
+- **Two surfaces, deliberately separate — don't merge them back together:**
   - `jocv` — day-2 lifecycle CLI (install/init/config/up/down/logs/update/
     reset). Single file on purpose (bash `source` doesn't give real scoping
     anyway, see its header comment) — same pattern as eth-docker's `ethd`.
-  - `deposit-cli` — standalone key-ceremony helper (`generate`, `import`;
-    guide Step 2-2/2-6). Kept out of `jocv` because it's the most
+  - `staking-deposit-cli.yml` + `staking-deposit-cli/*.sh` — standalone
+    key-ceremony helper (`deposit-generate`, `validator-import`; guide
+    Step 2-2/2-6), run via `docker compose -f staking-deposit-cli.yml run --rm
+    <service>`. Kept out of `jocv` because it's the most
     security-sensitive, most likely-to-independently-change part of the
-    project (deposit-cli image version, extra flags, a future
-    non-Lighthouse import command). `jocv init` calls it; it also runs
-    standalone. It never submits anything to any network — it only runs
-    local `docker run` and prints the deposit data for the operator to
-    submit themselves (guide Step 3-1).
+    project (image version, extra flags, a future non-Lighthouse import
+    command). `jocv init` calls it; it also runs standalone. No `docker
+    run`/`docker` command of any kind lives in `jocv` for this — `jocv`
+    only invokes `docker compose run` and never touches the mnemonic.
+    Neither service ever submits anything to any network (both also run
+    with `network_mode: none`); `deposit-generate` prints the deposit data
+    for the operator to submit themselves (guide Step 3-1). Compose file +
+    entrypoint scripts instead of a bash script driving `docker run`,
+    modeled on eth-docker's `staking-deposit-cli.yml`/`docker-entrypoint.sh`
+    convention (`ref/eth-docker/` if present) — but keep the import command
+    itself the guide's offline `lighthouse account_manager validator
+    import` (Step 2-6), NOT eth-docker's Keymanager-API-based
+    `validator-keys import`: that requires a Keymanager HTTP API this
+    project doesn't expose and the guide doesn't document. Only the
+    *structure* (tools-profile compose service + dedicated entrypoint
+    script) is borrowed from eth-docker here, not the mechanism.
 - **Compose files, one per client** (`lighthouse-vc-only.yml`, `geth.yml`,
   `lighthouse-cl-only.yml`), merged via `COMPOSE_FILE` (colon-joined,
   managed by `jocv`'s `compose_files_for_role()`) — not one file with
@@ -72,9 +85,11 @@ project and the same `container_name:`-pinned containers.
 - If you must test lifecycle commands for real, do it in a throwaway
   directory with a unique basename, ideally with an explicit
   `COMPOSE_PROJECT_NAME` set, far from any real deployment.
-- Never generate a real mnemonic/keys via `deposit-cli generate` outside of
-  an explicit, informed request — it's irreversible key material, not a
-  disposable test artifact.
+- Never generate a real mnemonic/keys via `docker compose -f
+  staking-deposit-cli.yml run --rm deposit-generate` outside of an explicit,
+  informed request — it's irreversible key material, not a disposable
+  test artifact. `docker compose -f staking-deposit-cli.yml config` (parse-only)
+  is fine any time.
 
 ## Where things are documented
 

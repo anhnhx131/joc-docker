@@ -192,12 +192,14 @@ existing `.env`), then runs whichever of the following apply:
 
 **`validator` / `all` only** (guide Step 2-2, 2-6):
 9. Prompts for your withdrawal address, validated as `0x` + 40 hex chars.
-10. Delegates to [`./deposit-cli`](#deposit-cli) — a separate, standalone
-    script — to actually generate and import the key. `jocv init` never
-    runs an `ethstaker-deposit-cli`/`lighthouse` docker command itself; see
-    that file for what it does step by step (password, mnemonic, the
-    guide's two verbatim `deposit-cli` commands, the mandatory typed `yes`
-    confirmation, then the Step 2-6 Lighthouse import).
+10. Delegates to [`staking-deposit-cli.yml`](#staking-deposit-cliyml) — a separate,
+    standalone compose file — to actually generate and import the key via
+    `docker compose -f staking-deposit-cli.yml run --rm <service>`. `jocv init`
+    never runs an `ethstaker-deposit-cli`/`lighthouse` docker command
+    itself, and never touches the mnemonic; see
+    `staking-deposit-cli/*-entrypoint.sh` for what happens step by step
+    (password, mnemonic, the guide's two verbatim commands, the mandatory
+    typed `yes` confirmation, then the Step 2-6 Lighthouse import).
 
 **Always, at the end:**
 16. Writes/updates `.env` (`NETWORK`, `ROLE`, `COMPOSE_FILE`, client
@@ -218,36 +220,91 @@ and the withdrawal address you provide is issued per-network by JBF/admin
 — reusing the same keys across networks isn't meaningful. Start a fresh
 checkout for a different network or role combination.
 
-### `deposit-cli`
+### `staking-deposit-cli.yml`
 
-A separate, standalone script (not a `jocv` subcommand) that does the
-actual guide Step 2-2 / 2-6 work:
+A separate, standalone compose file (not part of `COMPOSE_FILE`, never
+started by a plain `docker compose up`) that does the actual guide
+Step 2-2 / 2-6 work, run one-off via:
 
 ```
-deposit-cli generate --keys-dir <dir> --withdrawal-address <0x...>
-deposit-cli import   --keys-dir <dir> --testnet-dir <cl-config-dir> [--datadir <dir>]
+docker compose -f staking-deposit-cli.yml run --rm deposit-generate
+docker compose -f staking-deposit-cli.yml run --rm validator-import
 ```
 
-`jocv init` calls both of these for you automatically for `ROLE=validator`/
-`all` — most people never invoke it directly. It's kept as its own file,
-deliberately outside `jocv`, for two reasons:
+Each service's container-side logic — password, mnemonic, the mandatory
+typed `yes` confirmation, the guide's verbatim commands, chown-ing the
+result back to your user — lives in its own script under
+[`staking-deposit-cli/`](#staking-deposit-cli), bind-mounted read-only into the stock
+`gulabs/gu-ethstaker-deposit-cli` / `sigp/lighthouse` images. Neither
+image is ever rebuilt: what runs is exactly what JBF/admin published.
+
+`jocv init` calls both services for you automatically for
+`ROLE=validator`/`all` — most people never invoke this directly. It's kept
+as its own compose file + entrypoint scripts, deliberately outside `jocv`,
+for two reasons:
 
 - It's the part of this project most likely to need independent tweaking
-  (deposit-cli image version/tag, extra flags, a future non-Lighthouse
-  import command) — changing it never requires touching `jocv`'s larger
-  lifecycle logic (`install`/`up`/`down`/`logs`/`update`), and vice versa.
+  (image version/tag, extra flags, a future non-Lighthouse import command)
+  — changing it never requires touching `jocv`'s larger lifecycle logic
+  (`install`/`up`/`down`/`logs`/`update`), and vice versa.
 - It's the single most security-sensitive part of the whole project
-  (mnemonic handling). A small, single-purpose file is easier to read
+  (mnemonic handling). Small, single-purpose files are easier to read
   start-to-finish and diff against the guide than a block buried inside a
-  1000+ line CLI.
+  1000+ line CLI. `jocv` itself never sees the mnemonic — it only invokes
+  `docker compose run`, the container does everything else.
 
-`generate` never submits anything to any network — it only runs local
-`docker run` commands and, at the end, prints the resulting
-`deposit_data-*.json` path and contents so **you** copy/submit it yourself
-(guide Step 3-1). `import` is local-only too (hands the keystore to a
-local Lighthouse container). Copy this one file anywhere with Docker
-installed to run it standalone, e.g. to generate keys on a separate
-machine from the one running the Validator Client.
+`deposit-generate` never submits anything to any network — it only prints
+the resulting `deposit_data-*.json` path and contents at the end so
+**you** copy/submit it yourself (guide Step 3-1). `validator-import` hands
+the keystore to a local Lighthouse container; also local-only. Both
+services run with `network_mode: none` — no network access is available
+to either container, not just discouraged. Copy `staking-deposit-cli.yml` plus
+`staking-deposit-cli/` anywhere with Docker installed to run this standalone,
+e.g. to generate keys on a separate/offline machine from the one running
+the Validator Client.
+
+#### `staking-deposit-cli/`
+
+- `generate-entrypoint.sh` — overrides `gulabs/gu-ethstaker-deposit-cli`'s
+  entrypoint. Guide Step 2-2's two verbatim subcommands
+  (`generate-mnemonic`, `existing-mnemonic`), invoked directly since this
+  script now runs as the container's own entrypoint (see the file's
+  `BEGIN/END: verbatim from guide` markers to diff against the guide
+  text). Same mnemonic-handling discipline as before it was containerized:
+  never written to disk, `set +o history` around it, `unset` on every
+  exit path, `clear` afterward.
+- `import-entrypoint.sh` — overrides `sigp/lighthouse`'s entrypoint. Guide
+  Step 2-6's `lighthouse account_manager validator import`, adapted only
+  for where the consensus config volume is mounted (see the file's
+  `BEGIN/END: adapted from guide` marker). This is the guide's offline,
+  pre-startup import — not the same mechanism as eth-docker's own
+  Keymanager-API-based `validator-keys import` (see
+  [Checked against eth-docker's import](#checked-against-eth-dockers-import)
+  below for why).
+
+Both scripts default `HOST_UID`/`HOST_GID` to `0:0` (root — these
+containers have no unprivileged user to drop into, unlike eth-docker's
+rebuilt image) and `chown` the files they produce back to whatever
+`HOST_UID`/`HOST_GID` `jocv` passes in (your actual host user), so you're
+not left with root-owned key material on native Linux hosts.
+
+#### Checked against eth-docker's import
+
+eth-docker's key import ([`vc-utils/keymanager.sh`](https://github.com/ethstaker/eth-docker/blob/main/vc-utils/keymanager.sh),
+driven by `ethd keys import`) works completely differently from this project's:
+it calls the validator client's Keymanager REST API on an **already
+running** container to hot-load keys, works uniformly across every client
+eth-docker supports, and returns slashing-protection data over that API.
+That mechanism is not documented anywhere in the JOC guide, and adopting
+it would mean enabling a Keymanager HTTP API on the Validator Client that
+this project doesn't currently expose — outside this project's
+guide-fidelity rule (see `CLAUDE.md`). `import-entrypoint.sh` stays on the
+guide's own Step 2-6 command: an **offline** `lighthouse account_manager
+validator import` straight into the datadir, before the Validator Client
+ever starts. What *did* get adopted from eth-docker here is the
+structural pattern — a dedicated "tools"-profile compose service plus its
+own entrypoint script, instead of a raw `docker run` in a host script —
+and the chown-back-to-host-user convention described above.
 
 ### `jocv config`
 
@@ -389,10 +446,15 @@ guide-verified path.
 ## Security
 
 - The mnemonic is **never** written to a file, logged, or sent over the
-  network — it lives only in a shell variable, inside `deposit-cli`, for
-  the few seconds between the two `ethstaker-deposit-cli` calls, and is
-  `unset` immediately after.
+  network — it lives only in a shell variable, inside
+  `staking-deposit-cli/generate-entrypoint.sh`, running inside the
+  `deposit-generate` container, for the few seconds between the two
+  `ethstaker-deposit-cli` calls, and is `unset` immediately after. `jocv`
+  itself never sees it — it only runs `docker compose -f staking-deposit-cli.yml
+  run --rm deposit-generate`.
 - `set -x` is never used anywhere near `MNEMONIC` or `password.txt`.
+- Both `staking-deposit-cli.yml` services run with `network_mode: none` — network
+  access is unavailable to the container, not just unused.
 - Every file under `validator_keys/` is `chmod 600`; `data/jwt.hex`
   (execution↔consensus shared secret) likewise.
 - `data/` and `.env` are git-ignored — never commit them.
@@ -403,34 +465,41 @@ guide-verified path.
   [Updating config via git](#updating-config-via-git)). Never confuse this
   directory with `data/validator_keys/` — nothing under `networks/` should
   ever contain a mnemonic, keystore, or password.
-- Key generation/import (`deposit-cli`) calls the exact docker images
+- Key generation/import (`staking-deposit-cli.yml`) calls the exact docker images
   JBF/admin published in the guide
   (`gulabs/gu-ethstaker-deposit-cli:v0.0.1-gubuild.0`,
-  `sigp/lighthouse:v7.0.1`) directly. No intermediate image or script
-  touches your key material — this is intentional, so you can diff every
-  command this CLI runs against the guide's own text and trust that
-  nothing "extra" is happening. (This guarantee does **not** extend to the
-  `execution`/`beacon` services — see [Option 3 caveat](#option-3-caveat-el-cl-roles).)
-- Neither `deposit-cli generate` nor `deposit-cli import` ever submits
-  anything to any network — both only run local `docker run` commands
-  against your own disk. Submitting `deposit_data-*.json` (guide Step 3-1)
-  is a manual step you do yourself, on purpose — this repo doesn't automate it.
+  `sigp/lighthouse:v7.0.1`) directly, unmodified — the entrypoint scripts
+  are bind-mounted in at runtime, never baked into a rebuilt image. No
+  intermediate image or script touches your key material — this is
+  intentional, so you can diff every command this CLI runs against the
+  guide's own text and trust that nothing "extra" is happening. (This
+  guarantee does **not** extend to the `execution`/`beacon` services — see
+  [Option 3 caveat](#option-3-caveat-el-cl-roles).)
+- Neither `deposit-generate` nor `validator-import` ever submits anything
+  to any network — both only run local commands against your own disk
+  (and, per `network_mode: none` above, could not reach a network even if
+  they tried). Submitting `deposit_data-*.json` (guide Step 3-1) is a
+  manual step you do yourself, on purpose — this repo doesn't automate it.
 
 ### Verify this yourself
 
 Please don't run this blind. Before trusting it with a real mnemonic:
 
 1. **Read the code.** The CLI proper is one file, `jocv`. Key
-   generation/import is a second, separate file, `deposit-cli` — read that
-   one specifically before trusting it with a real mnemonic. The two
-   `docker run ... ethstaker-deposit-cli` blocks in `cmd_generate()` are
-   marked `# --- BEGIN/END: verbatim from guide, Step 2-2 ---` so you can
-   diff them character-for-character against the original guide.
-2. **Test mnemonic generation with no network access.** The guide's own
+   generation/import is `staking-deposit-cli.yml` plus
+   `staking-deposit-cli/generate-entrypoint.sh` / `import-entrypoint.sh` — read
+   those specifically before trusting them
+   with a real mnemonic. The verbatim/adapted command blocks are marked
+   `# --- BEGIN/END: verbatim|adapted from guide, Step 2-2/2-6 ---` so you
+   can diff them directly against the original guide.
+2. **No network access needed, and none available.** The guide's own
    command already uses `--ignore_connectivity`, which tells the deposit
-   CLI not to check chain connectivity — you can run
-   `docker run --rm --network none -v "$PWD/validator_keys:/app/validator_keys" gulabs/gu-ethstaker-deposit-cli:v0.0.1-gubuild.0 --non_interactive --ignore_connectivity generate-mnemonic --mnemonic_language=english`
-   yourself (add `--network none`) to confirm it needs no network at all.
+   CLI not to check chain connectivity. `staking-deposit-cli.yml` sets
+   `network_mode: none` on both services, so this isn't just a claim you
+   have to verify yourself anymore — the container has no network to send
+   anything over even if it wanted to. You can still confirm it
+   independently: `docker network inspect none` while a `deposit-generate`
+   run is in progress will show no container attached to any bridge.
 3. **Run this on a disk-encrypted machine.** Prefer local console access;
    avoid SSH sessions that log the terminal session (e.g. `script`,
    session-recording bastions, some corporate SSH proxies) while the
@@ -488,13 +557,33 @@ inferred/adapted or added — flagging it explicitly so you can double-check:
   `--testnet-dir=/data/config` still resolves now that consensus config
   lives under `networks/<NETWORK>/cl` instead of `data/config`. Same
   flags/values as the guide otherwise.
-- **Key generation/import split into a standalone `deposit-cli` script**,
-  called by `jocv init` rather than inlined in `jocv` itself. Not from the
-  guide — a deliberate architecture choice so the most security-sensitive,
-  most likely-to-change part of this project (deposit-cli image version,
-  extra flags, a future non-Lighthouse import command) never requires
-  touching `jocv`'s larger lifecycle logic, and can be read/audited/run
-  standalone. See [`deposit-cli`](#deposit-cli) above.
+- **Key generation/import split into a standalone `staking-deposit-cli.yml`
+  compose file + `staking-deposit-cli/*.sh`**, called by `jocv init`
+  via `docker compose run` rather than inlined in `jocv` itself. Not from
+  the guide — a deliberate architecture choice so the most
+  security-sensitive, most likely-to-change part of this project (image
+  version, extra flags, a future non-Lighthouse import command) never
+  requires touching `jocv`'s larger lifecycle logic, and can be
+  read/audited/run standalone. Originally a single bash script that ran
+  `docker run` itself; restructured into a compose file + bind-mounted
+  entrypoint scripts, modeled on eth-docker's
+  `staking-deposit-cli.yml`/`docker-entrypoint.sh` convention, so `jocv` never
+  runs a raw `docker run`/`docker` command and never touches the mnemonic
+  at all — it only invokes `docker compose run`. See
+  [`staking-deposit-cli.yml`](#staking-deposit-cliyml) above, including
+  [why this doesn't reuse eth-docker's Keymanager-API import](#checked-against-eth-dockers-import).
+- **`network_mode: none` on both `staking-deposit-cli.yml` services.** Not from
+  the guide. The guide's own `--ignore_connectivity` flag already implies
+  the tool needs no network; this makes that a hard guarantee instead of
+  an assumption. README's "Verify this yourself" used to ask you to test
+  this manually with `--network none` — now it's simply always true.
+- **`HOST_UID`/`HOST_GID` chown-back in both entrypoint scripts**,
+  defaulting to `0:0`. Adapted from eth-docker's
+  `ethstaker-deposit-cli/docker-entrypoint.sh`, which does the same thing
+  via `gosu` + `chown`. Not from the guide — needed because these
+  containers run as root by default (no unprivileged user to drop into,
+  unlike eth-docker's rebuilt image) and would otherwise leave root-owned
+  key material behind on native Linux hosts.
 - **Idempotency guards** (skip key generation if keys already exist; ask
   before overwriting non-empty directories or an existing `.env`). The
   guide is written as a one-time walkthrough and doesn't address re-runs.
@@ -544,10 +633,13 @@ joc-docker/
 │                              #      (install, init, config, beacon_set, status,
 │                              #      update_config, update, up, down, reset, logs)
 │                              #   4. usage() + dispatch (case "$1") at the bottom
-├── deposit-cli                # standalone key ceremony helper (Step 2-2, 2-6)
-│                              #   generate: mnemonic + keystore + deposit data
-│                              #   import: hands keystore to a local Lighthouse
+├── staking-deposit-cli.yml             # standalone key ceremony compose file (Step 2-2, 2-6)
+│                              #   deposit-generate: mnemonic + keystore + deposit data
+│                              #   validator-import: hands keystore to a local Lighthouse
 │                              # called by 'jocv init', but runnable on its own
+├── staking-deposit-cli/
+│   ├── generate-entrypoint.sh  # overrides gu-ethstaker-deposit-cli's entrypoint
+│   └── import-entrypoint.sh    # overrides sigp/lighthouse's entrypoint
 ├── lighthouse-vc-only.yml     # 'validator' service — guide-verbatim (Step 2-7)
 ├── geth.yml                    # 'execution' service — el-cl/all only, unverified (Option 3 caveat)
 ├── lighthouse-cl-only.yml       # 'beacon' service — el-cl/all only, unverified (Option 3 caveat)

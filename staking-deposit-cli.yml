@@ -1,0 +1,66 @@
+# staking-deposit-cli.yml — key ceremony compose file (guide Step 2-2, Step 2-6).
+#
+# Two "tools"-profile services, run one-off via
+#   docker compose -f staking-deposit-cli.yml run --rm <service>
+# — never started by a plain `docker compose up` (this file is invoked
+# with an explicit -f, it is never added to COMPOSE_FILE in .env):
+#   deposit-generate   gulabs/gu-ethstaker-deposit-cli   (mnemonic + keystore + deposit_data, Step 2-2)
+#   validator-import   sigp/lighthouse                   (hand the keystore to Lighthouse, Step 2-6)
+#
+# Replaces the old standalone `./deposit-cli` script (removed) — same two
+# guide steps, same guide-fidelity markers, now structured as compose
+# services + bind-mounted entrypoint scripts under staking-deposit-cli/ instead of
+# `docker run` calls inside a host bash script. Modeled on eth-docker's
+# convention (see
+# https://github.com/ethstaker/eth-docker/blob/main/staking-deposit-cli.yml +
+# .../ethstaker-deposit-cli/docker-entrypoint.sh), with one deliberate
+# difference: eth-docker builds its own image so it can COPY the
+# entrypoint script in; this file bind-mounts staking-deposit-cli/ read-only into
+# the stock, guide-specified images instead, so neither image is ever
+# rebuilt or modified — what runs is exactly what JBF/admin published.
+# See staking-deposit-cli/*.sh for what each step does (password, mnemonic, the
+# mandatory typed 'yes' confirmation, the Step 2-6 Lighthouse import) and
+# README.md's "staking-deposit-cli.yml" section.
+#
+# Called automatically by `jocv init`, but fully standalone — copy this
+# file plus staking-deposit-cli/ anywhere with Docker installed and run
+#   docker compose -f staking-deposit-cli.yml run --rm deposit-generate
+# yourself, e.g. to generate keys on a separate/offline machine from the
+# one running the Validator Client.
+#
+# IMPORTANT — what these services do NOT do: neither submits a deposit
+# transaction to any network, calls any RPC/API, or uploads anything
+# anywhere. `deposit-generate` prints the resulting deposit data so YOU can
+# copy it and submit it yourself (guide Step 3-1). Both services run with
+# `network_mode: none` — network access isn't just discouraged, it's
+# unavailable to the container (see README.md's Security section and
+# "Verify this yourself" #2, which used to be a manual check; it's now the
+# default).
+services:
+  deposit-generate:
+    profiles: ["tools"]
+    restart: "no"
+    image: gulabs/gu-ethstaker-deposit-cli:v0.0.1-gubuild.0
+    network_mode: none
+    environment:
+      - WITHDRAWAL_ADDRESS=${WITHDRAWAL_ADDRESS:?Set WITHDRAWAL_ADDRESS (jocv init prompts for this; standalone, export it yourself).}
+      - HOST_UID=${HOST_UID:-0}
+      - HOST_GID=${HOST_GID:-0}
+    volumes:
+      - ./data/validator_keys:/app/validator_keys
+      - ./staking-deposit-cli:/entrypoint:ro
+    entrypoint: ["/entrypoint/generate-entrypoint.sh"]
+
+  validator-import:
+    profiles: ["tools"]
+    restart: "no"
+    image: sigp/lighthouse:v7.0.1
+    network_mode: none
+    environment:
+      - HOST_UID=${HOST_UID:-0}
+      - HOST_GID=${HOST_GID:-0}
+    volumes:
+      - ./data:/data
+      - ./networks/${NETWORK:?Set NETWORK (jocv init exports this; standalone, export it yourself).}/cl:/data/config:ro
+      - ./staking-deposit-cli:/entrypoint:ro
+    entrypoint: ["/entrypoint/import-entrypoint.sh"]

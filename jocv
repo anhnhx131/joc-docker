@@ -18,9 +18,10 @@
 #   4. usage() + dispatch (case "$1") at the very bottom
 #
 # The two ethstaker-deposit-cli docker commands and the Step 2-6 import
-# command live in ./deposit-cli, not in this file (see that file's header
-# for why), marked with BEGIN/END comments so you can diff them directly
-# against the guide text — see README.md's "Verify this yourself" section.
+# command live in staking-deposit-cli.yml + staking-deposit-cli/, not in this file (see
+# staking-deposit-cli.yml's header for why), marked with BEGIN/END comments so you
+# can diff them directly against the guide text — see README.md's "Verify
+# this yourself" section.
 set -euo pipefail
 
 # =============================================================================
@@ -497,10 +498,12 @@ EOF
   fi
 
   # --- Validator setup (ROLE=validator or all) — Guide Step 2-2, 2-6 -------
-  # The actual key-generation/import docker commands live in ./deposit-cli,
-  # not here — see that file's header comment for why it's kept separate
+  # The actual key-generation/import docker commands live in
+  # staking-deposit-cli.yml + staking-deposit-cli/, not here — see staking-deposit-cli.yml's
+  # header comment for why it's kept separate
   # (independent tweaking, most security-sensitive part of this project).
-  # This block only collects the withdrawal address and calls it.
+  # This block only collects the withdrawal address and invokes compose;
+  # jocv never touches the mnemonic itself.
   if [[ "$needs_validator" == true ]]; then
     info "Validator setup: withdrawal address"
     if [[ -n "${VALIDATOR_WITHDRAWAL_ADDRESS:-}" ]] && is_valid_eth_address "${VALIDATOR_WITHDRAWAL_ADDRESS:-}"; then
@@ -517,16 +520,21 @@ EOF
     export VALIDATOR_WITHDRAWAL_ADDRESS
 
     # All three networks (mainnet/testnet/sandbox) share the same
-    # ethstaker-deposit-cli chain config — deposit-cli hardcodes
+    # ethstaker-deposit-cli chain config — the generate-entrypoint hardcodes
     # --chain=joc regardless of NETWORK, per the guide's Step 2-2 command.
-    "$JOCV_ROOT/deposit-cli" generate \
-      --keys-dir "$KEYS_DIR" \
-      --withdrawal-address "$VALIDATOR_WITHDRAWAL_ADDRESS"
+    # NETWORK is already exported above, so staking-deposit-cli.yml's
+    # ${NETWORK} volume interpolation (validator-import) resolves correctly.
+    docker compose -f "$JOCV_ROOT/staking-deposit-cli.yml" run --rm \
+      -e WITHDRAWAL_ADDRESS="$VALIDATOR_WITHDRAWAL_ADDRESS" \
+      -e HOST_UID="$(id -u)" \
+      -e HOST_GID="$(id -g)" \
+      deposit-generate
 
     info "Step 2-6: importing the validator key into the Lighthouse Validator Client..."
-    "$JOCV_ROOT/deposit-cli" import \
-      --keys-dir "$KEYS_DIR" \
-      --testnet-dir "$cl_dir"
+    docker compose -f "$JOCV_ROOT/staking-deposit-cli.yml" run --rm \
+      -e HOST_UID="$(id -u)" \
+      -e HOST_GID="$(id -g)" \
+      validator-import
     success "Validator key imported."
   fi
 

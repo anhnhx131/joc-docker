@@ -14,3 +14,4 @@ data/
 # repo supports committing them so validators receive updates via
 # `git pull` instead of a manual download every time — see
 # networks/README.md.
+ref/
