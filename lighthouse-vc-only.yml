@@ -1,0 +1,31 @@
+# lighthouse-vc-only.yml — Validator Client only (guide Option 2, Recommended).
+#
+# Flags here are guide-verbatim (Step 2-7). See README.md.
+#
+# Structured after eth-docker's per-client compose file convention (e.g.
+# https://github.com/ethstaker/eth-docker/blob/main/lighthouse-vc-only.yml):
+# one small compose file per client/role, selected by listing it in
+# COMPOSE_FILE in .env (docker compose reads COMPOSE_FILE natively from
+# .env, no -f flags needed). See jocv: compose_files_for_role().
+#
+# Unlike eth-docker's version, this does not build Lighthouse from source,
+# does not add metrics/doppelganger/MEV-boost/exit-tooling — none of that
+# is part of the official guide, so none of it is here. Just the guide's
+# Step 2-7 command, translated into a compose service.
+services:
+  validator:
+    image: sigp/lighthouse:v7.0.1
+    container_name: validator
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      - ./data:/data
+      - ./networks/${NETWORK}/cl:/network:ro
+    command:
+      - lighthouse
+      - validator_client
+      - --validators-dir=/data/validators
+      - --testnet-dir=/network
+      - --suggested-fee-recipient=${WITHDRAWAL_ADDRESS}
+      - --beacon-nodes=${BEACON_URL}

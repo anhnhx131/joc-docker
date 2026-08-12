@@ -37,9 +37,10 @@ bootnodes, fork epochs) — safe to commit to git, unlike `data/` or `.env`.
   Fork phase (guide Step 4). Used by `jocv update-config <phase>`.
 - `cl/genesis.ssz` — optional precomputed consensus genesis state. Not
   referenced by any explicit flag: Lighthouse's `--testnet-dir` auto-loads
-  `genesis.ssz` from that directory if present, and since `docker-compose.yml`
-  bind-mounts the whole `networks/<NETWORK>/cl/` directory as the
-  testnet-dir, dropping the file in here is enough — no code changes needed.
+  `genesis.ssz` from that directory if present, and since
+  `lighthouse-vc-only.yml`/`lighthouse-cl-only.yml` bind-mount the whole
+  `networks/<NETWORK>/cl/` directory as the testnet-dir, dropping the file
+  in here is enough — no code changes needed.
 - `el/genesis.json`, `el/bootnodes.txt`, `cl/bootnodes.txt` — **only
   needed if you run your own Execution/Consensus Client** (`ROLE=el-cl` or
   `ROLE=all`, i.e. the guide's Option 3). **The official guide does not

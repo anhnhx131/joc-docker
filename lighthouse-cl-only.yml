@@ -1,0 +1,28 @@
+# lighthouse-cl-only.yml — Consensus Client / Beacon Node (Lighthouse).
+# Only loaded when ROLE=el-cl or all, always alongside geth.yml
+# (depends_on: execution below only resolves when both files are merged
+# together — see jocv: compose_files_for_role(), which always pairs them).
+#
+# NOT from the official guide — see geth.yml's header comment; the same
+# "Option 3 caveat" applies here.
+services:
+  beacon:
+    image: sigp/lighthouse:v7.0.1
+    container_name: beacon
+    restart: unless-stopped
+    depends_on:
+      - execution
+    volumes:
+      - ./data/beacon:/data
+      - ./networks/${NETWORK}/cl:/network:ro
+      - ./data/jwt.hex:/jwt.hex:ro
+    command:
+      - lighthouse
+      - beacon_node
+      - --datadir=/data
+      - --testnet-dir=/network
+      - --http
+      - --http-address=0.0.0.0
+      - --execution-endpoint=http://execution:8551
+      - --execution-jwt=/jwt.hex
+      - --boot-nodes=${CL_BOOTNODES:-}

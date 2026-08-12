@@ -132,26 +132,33 @@ is_supported_el_client() { _list_contains "${1:-}" "${SUPPORTED_EL_CLIENTS[@]}";
 is_supported_cl_client() { _list_contains "${1:-}" "${SUPPORTED_CL_CLIENTS[@]}"; }
 is_supported_role()      { _list_contains "${1:-}" "${SUPPORTED_ROLES[@]}"; }
 
-# docker compose profile name(s) to activate for a given ROLE, space-separated.
+# Compose file(s) to load for a given ROLE, ':'-joined for COMPOSE_FILE.
+# One file per client/role (eth-docker convention — see e.g.
+# https://github.com/ethstaker/eth-docker/blob/main/lighthouse-vc-only.yml),
+# rather than one file with docker-compose 'profiles:' filtering — this
+# way a service you're not using is never even parsed by docker compose,
+# so e.g. geth.yml's required EL_CLIENT_IMAGE/EL_NETWORK_ID can never
+# break `docker compose up` for ROLE=validator, which never loads it.
 #   validator -> only the Validator Client (guide Option 2: connects to an
 #                external Consensus Client, e.g. BCCloud)
 #   el-cl     -> only Execution + Consensus clients, no validator duties
 #   all       -> everything, self-hosted (guide Option 3)
-profiles_for_role() {
+compose_files_for_role() {
   case "${1:-}" in
-    validator) echo "validator" ;;
-    el-cl)     echo "el-cl" ;;
-    all)       echo "el-cl validator" ;;
+    validator) echo "lighthouse-vc-only.yml" ;;
+    el-cl)     echo "geth.yml:lighthouse-cl-only.yml" ;;
+    all)       echo "geth.yml:lighthouse-cl-only.yml:lighthouse-vc-only.yml" ;;
     *)         return 1 ;;
   esac
 }
 
 # Enforces that EL_CLIENT_IMAGE / EL_NETWORK_ID are set before starting a
-# role that includes the execution/beacon services. Deliberately checked
-# here in bash, not via docker-compose's ':?' required-variable syntax —
-# compose interpolates every service's variables at parse time regardless
-# of active profile, so a compose-level requirement here would also break
-# ROLE=validator, which never touches these services at all.
+# role that includes the execution/beacon services, with a friendlier
+# message than docker compose's own. geth.yml also declares these as
+# required (':?') at the compose level now — safe to do since geth.yml is
+# only ever loaded for ROLE=el-cl/all (see compose_files_for_role()) — so
+# this check is a nicer error message layered on top, not a load-bearing
+# workaround.
 check_el_config() {
   local missing=()
   [[ -n "${EL_CLIENT_IMAGE:-}" ]] || missing+=("EL_CLIENT_IMAGE")
@@ -389,10 +396,9 @@ EOF
   is_supported_cl_client "$CL_CLIENT" \
     || die "Unsupported CL_CLIENT '$CL_CLIENT'. Currently supported: ${SUPPORTED_CL_CLIENTS[*]}."
 
-  local profiles compose_profiles
-  profiles="$(profiles_for_role "$ROLE")"
-  compose_profiles="$(echo "$profiles" | tr ' ' ',')"
-  success "Network: $NETWORK | Role: $ROLE (profiles: $compose_profiles) | EL: $EL_CLIENT | CL: $CL_CLIENT"
+  local compose_file
+  compose_file="$(compose_files_for_role "$ROLE")"
+  success "Network: $NETWORK | Role: $ROLE (compose file(s): $compose_file) | EL: $EL_CLIENT | CL: $CL_CLIENT"
 
   local needs_validator=false needs_el_cl=false
   [[ "$ROLE" == "validator" || "$ROLE" == "all" ]] && needs_validator=true
@@ -633,7 +639,7 @@ EOF
   fi
   set_env_var "NETWORK" "$NETWORK"
   set_env_var "ROLE" "$ROLE"
-  set_env_var "COMPOSE_PROFILES" "$compose_profiles"
+  set_env_var "COMPOSE_FILE" "$compose_file"
   set_env_var "EL_CLIENT" "$EL_CLIENT"
   set_env_var "CL_CLIENT" "$CL_CLIENT"
 
@@ -937,10 +943,11 @@ EOF
 }
 
 # --- jocv update ---------------------------------------------------------------------
-# Update this CLI itself (this file, docker-compose.yml, and any networks/
-# files your team commits) via `git pull`. Loosely modeled on eth-docker's
-# `ethd update`, but much simpler: no OS package management, no .env
-# migration, no automatic container restart or config apply.
+# Update this CLI itself (this file, the per-client *.yml compose files,
+# and any networks/ files your team commits) via `git pull`. Loosely
+# modeled on eth-docker's `ethd update`, but much simpler: no OS package
+# management, no .env migration, no automatic container restart or config
+# apply.
 cmd_update() {
   [[ -d "$JOCV_ROOT/.git" ]] \
     || die "$JOCV_ROOT is not a git checkout. Clone this repo with 'git clone' to use 'jocv update'."
@@ -976,10 +983,8 @@ cmd_update() {
 
   # Look ahead at what's changing under paths that affect a running
   # node, so we can tell you what to do next instead of acting on it.
-  local compose_changed=false
-  if git diff --name-only "HEAD..origin/$branch" | grep -qx 'docker-compose.yml'; then
-    compose_changed=true
-  fi
+  local compose_changed
+  compose_changed="$(git diff --name-only "HEAD..origin/$branch" -- '*.yml' || true)"
   local phases_changed el_cl_changed
   phases_changed="$(git diff --name-only "HEAD..origin/$branch" -- 'networks/*/cl/phases/' || true)"
   el_cl_changed="$(git diff --name-only "HEAD..origin/$branch" -- 'networks/*/el/' || true)"
@@ -987,8 +992,10 @@ cmd_update() {
   git pull --ff-only origin "$branch"
   success "Updated to $(git rev-parse --short HEAD)."
 
-  if [[ "$compose_changed" == true ]]; then
-    warn "docker-compose.yml changed. Review the diff, then run 'jocv up' to apply."
+  if [[ -n "$compose_changed" ]]; then
+    warn "Compose file(s) changed:"
+    echo "$compose_changed" | sed 's/^/  /' >&2
+    warn "Review the diff, then run 'jocv up' to apply."
   fi
   if [[ -n "$phases_changed" ]]; then
     warn "New/changed phase config(s) pulled in:"
@@ -1006,8 +1013,8 @@ cmd_update() {
 }
 
 # --- jocv up -------------------------------------------------------------------------
-# (Re)start whichever service(s) the current ROLE needs, with the current
-# .env / docker-compose.yml.
+# (Re)start whichever service(s) the current ROLE needs, per the current
+# .env (including which compose file(s) COMPOSE_FILE points at).
 cmd_up() {
   check_docker
   [[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found. Run 'jocv init' first."
@@ -1018,7 +1025,7 @@ cmd_up() {
   fi
 
   ( cd "$JOCV_ROOT" && docker compose up -d )
-  success "Up (role: ${ROLE:-<unset>}, profiles: ${COMPOSE_PROFILES:-<unset>}). Check with: jocv status"
+  success "Up (role: ${ROLE:-<unset>}, compose file(s): ${COMPOSE_FILE:-<unset>}). Check with: jocv status"
 }
 
 # --- jocv down -----------------------------------------------------------------------

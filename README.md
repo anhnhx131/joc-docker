@@ -34,14 +34,25 @@ code; treat it as unverified until confirmed with JBF/admin.
 | `NETWORK` | `mainnet` \| `testnet` \| `sandbox` | Which JOC network's config/genesis/bootnodes to use — see `networks/<NETWORK>/{el,cl}/` and [networks/README.md](networks/README.md). |
 | `EL_CLIENT` / `CL_CLIENT` | `geth` / `lighthouse` (only options today) | Which client runs each layer. Structured so `nethermind`, `besu`, `prysm`, etc. can be added later without changing this shape — but only `geth`+`lighthouse` are implemented right now; any other value is rejected with a clear "not supported yet" error (`jocv`: `SUPPORTED_EL_CLIENTS` / `SUPPORTED_CL_CLIENTS`). |
 
-`ROLE` maps to [docker compose profiles](https://docs.docker.com/compose/how-tos/profiles/)
-via `COMPOSE_PROFILES` in `.env` (docker compose reads this natively):
+`ROLE` maps to which compose file(s) get loaded, via `COMPOSE_FILE` in
+`.env` (docker compose reads this natively — one small compose file per
+client/role, [eth-docker](https://github.com/ethstaker/eth-docker)'s
+convention, e.g. its
+[`lighthouse-vc-only.yml`](https://github.com/ethstaker/eth-docker/blob/main/lighthouse-vc-only.yml)):
 
-| `ROLE` | Services started | Guide option |
-| --- | --- | --- |
-| `validator` | `validator` only | Option 2 (Recommended) — what the guide's Step 2 documents |
-| `el-cl` | `execution` + `beacon` | Undocumented in the guide (closest to Option 3, minus the validator) |
-| `all` | `execution` + `beacon` + `validator` | Option 3 — guide says "contact us directly" |
+| `ROLE` | `COMPOSE_FILE` | Services started | Guide option |
+| --- | --- | --- | --- |
+| `validator` | `lighthouse-vc-only.yml` | `validator` only | Option 2 (Recommended) — what the guide's Step 2 documents |
+| `el-cl` | `geth.yml:lighthouse-cl-only.yml` | `execution` + `beacon` | Undocumented in the guide (closest to Option 3, minus the validator) |
+| `all` | `geth.yml:lighthouse-cl-only.yml:lighthouse-vc-only.yml` | `execution` + `beacon` + `validator` | Option 3 — guide says "contact us directly" |
+
+A service you're not using is never even parsed by docker compose — its
+file just isn't in `COMPOSE_FILE`. This was previously done with a single
+`docker-compose.yml` and [docker compose
+profiles](https://docs.docker.com/compose/how-tos/profiles/) instead;
+switched to match eth-docker's approach once client choice (`EL_CLIENT`/
+`CL_CLIENT`) becomes real (multiple files per layer composes more cleanly
+than one file with more and more profile combinations).
 
 ## What this is NOT
 
@@ -80,8 +91,9 @@ much smaller — no OS provisioning, no `.env` schema migration engine, and
 | `ethd` | `jocv` equivalent | Why it's smaller here |
 | --- | --- | --- |
 | `install` (installs Docker, OS packages, tunes the OS, adds user to `docker` group) | `jocv install` | Installs Docker Engine + compose plugin only (official apt repo on Ubuntu/Debian, best-effort dnf repo elsewhere), and adds your user to the `docker` group. Deliberately does **not** tune the OS (swappiness, noatime, chrony/NTP) or install unrelated packages — a tool that's about to handle your mnemonic shouldn't also be doing broad root-level OS provisioning. Shows every `sudo` command before running it and asks for confirmation once. Idempotent: no-ops if Docker is already installed and working. |
+| One `.yml` file per client (e.g. `lighthouse-vc-only.yml`), merged via `COMPOSE_FILE` | Same — `lighthouse-vc-only.yml`, `geth.yml`, `lighthouse-cl-only.yml`, merged via `COMPOSE_FILE` per `ROLE` | This one isn't simplified, just scoped down: eth-docker has ~5 EL × ~6 CL × addons; `jocv` has exactly the files today's `SUPPORTED_EL_CLIENTS`/`SUPPORTED_CL_CLIENTS` need. |
 | `config` (interactive `.env` wizard + schema migration across versions) | `jocv init` prompts (network/role) + `jocv beacon set <url>` | A handful of variables, not dozens — no schema to migrate. |
-| `up` | `jocv up` | Same idea: `docker compose up -d`, respecting `COMPOSE_PROFILES`. |
+| `up` | `jocv up` | Same idea: `docker compose up -d`, respecting `COMPOSE_FILE`. |
 | `down` / `stop` | `jocv down` | Same idea, with a guide-specific reminder not to stop while awaiting activation (Step 3-2). |
 | `logs` | `jocv logs [service]` | Same idea: `docker compose logs -f`. Asks which service if more than one is active. |
 | `update` (`git pull`, `.env` migration, image rebuild, restart, all in one) | `jocv update` | Only does the `git pull` part, and only if the working tree is clean and the pull is a fast-forward. Never migrates `.env`, never restarts anything, never applies a new config by itself — it just tells you what changed and which command to run next. |
@@ -195,7 +207,7 @@ existing `.env`), then runs whichever of the following apply:
 15. Imports the key into Lighthouse (guide Step 2-6 command).
 
 **Always, at the end:**
-16. Writes/updates `.env` (`NETWORK`, `ROLE`, `COMPOSE_PROFILES`, client
+16. Writes/updates `.env` (`NETWORK`, `ROLE`, `COMPOSE_FILE`, client
     choices, and whatever the role above collected).
 17. Runs `docker compose up -d`.
 18. For `validator`/`all`: prints the `deposit_data-xxx.json` path (needed
@@ -292,8 +304,8 @@ Updates this CLI checkout itself via `git pull` — the code, and any
 - the pull wouldn't be a fast-forward (i.e. your local branch diverged).
 
 Shows the incoming commits and asks for confirmation before pulling.
-Afterward it tells you — but does not act on — whether
-`docker-compose.yml`, `networks/*/cl/phases/**`, or `networks/*/el/**`
+Afterward it tells you — but does not act on — whether any root-level
+`*.yml` compose file, `networks/*/cl/phases/**`, or `networks/*/el/**`
 changed, so you follow up deliberately with `jocv up` /
 `jocv update-config <phase>` / a fresh `jocv init` respectively.
 
@@ -327,10 +339,10 @@ For starting over. Two tiers:
 The official guide's Step 2 only documents `ROLE=validator` (Option 2).
 For `el-cl`/`all`, the guide's only words on the matter are: *"Organizations
 selecting Option 3 should contact us directly."* That means, unlike
-everything else in this CLI, the `execution` and `beacon` services in
-`docker-compose.yml` and the corresponding `jocv init` steps are **this
-project's own best-effort convention**, based on ordinary Geth/Lighthouse
-usage — not copied from any JOC/JBF source:
+everything else in this CLI, the `execution` and `beacon` services
+(`geth.yml`, `lighthouse-cl-only.yml`) and the corresponding `jocv init`
+steps are **this project's own best-effort convention**, based on
+ordinary Geth/Lighthouse usage — not copied from any JOC/JBF source:
 
 - The Geth image/version (`EL_CLIENT_IMAGE`) and network ID
   (`EL_NETWORK_ID`) have **no default** — you must get these from
@@ -411,10 +423,20 @@ inferred/adapted or added — flagging it explicitly so you can double-check:
   /`sandbox` select their own config/genesis/bootnodes directory, on the
   assumption (not stated in the guide) that these networks follow the same
   file layout as mainnet.
-- **`docker-compose.yml` command as a YAML list, not a shell string**, for
-  the `validator` service. The guide's Step 2-7 `docker run` block is
+- **`lighthouse-vc-only.yml` command as a YAML list, not a shell string**,
+  for the `validator` service. The guide's Step 2-7 `docker run` block is
   missing a trailing `\` line-continuation on one line; expressing it as a
   YAML list sidesteps that ambiguity entirely while keeping the same flags.
+- **One compose file per client (`lighthouse-vc-only.yml`, `geth.yml`,
+  `lighthouse-cl-only.yml`), merged via `COMPOSE_FILE`, instead of one
+  `docker-compose.yml` filtered by `profiles:`.** Not from the guide —
+  adopted from
+  [eth-docker](https://github.com/ethstaker/eth-docker/blob/main/lighthouse-vc-only.yml)'s
+  convention. Functionally similar to `profiles:` today (exactly one file
+  per role gets loaded either way), but scales better once `EL_CLIENT`/
+  `CL_CLIENT` support more than one option each, and means a service
+  you're not using is never parsed at all (no more empty-fallback
+  workarounds for required variables like `EL_CLIENT_IMAGE`).
 - **`execution`/`beacon` services entirely.** See
   [Option 3 caveat](#option-3-caveat-el-cl-roles) — not from the guide at
   all, best-effort Geth/Lighthouse convention.
@@ -484,8 +506,10 @@ joc-docker/
 │                              #      (install, init, config, beacon_set, status,
 │                              #      update_config, update, up, down, reset, logs)
 │                              #   4. usage() + dispatch (case "$1") at the bottom
-├── docker-compose.yml         # execution / beacon / validator services, profile-gated
-├── .env.example
+├── lighthouse-vc-only.yml     # 'validator' service — guide-verbatim (Step 2-7)
+├── geth.yml                    # 'execution' service — el-cl/all only, unverified (Option 3 caveat)
+├── lighthouse-cl-only.yml       # 'beacon' service — el-cl/all only, unverified (Option 3 caveat)
+├── .env.example                 # sets COMPOSE_FILE per ROLE — see compose_files_for_role()
 └── networks/
     ├── README.md
     └── {mainnet,testnet,sandbox}/
