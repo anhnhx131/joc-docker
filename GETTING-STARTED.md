@@ -80,7 +80,7 @@ deposit-data`.
 - `./jocv upgrade` then `./jocv restart` — pull a new hard fork
   `config.yaml` (or any other update) from git, then apply it
 - `./jocv logs` / `./jocv down` — day-to-day operation
-- `./jocv reset --data` — wipe keys/deposit data/`.env` to start over (irreversible)
+- `./jocv destroy` — wipe keys/deposit data/`.env` to start over (irreversible)
 
 Troubleshooting, the full command reference, and the multi-network/role
 model: [README.md](README.md).

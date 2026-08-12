@@ -416,22 +416,23 @@ asks you to name a service if more than one is active
 above for the difference between `up` (recreates containers, picks up
 compose/`.env` changes) and a plain restart (doesn't).
 
-### `jocv reset [--data]`
+### `jocv destroy`
 
-For starting over. Two tiers:
+For starting over from nothing. Stops this node's containers, then
+**permanently deletes** `data/` (keys, deposit data, execution/consensus
+chain data) and `.env`. Prints exactly what will be removed, asks you to
+confirm the deposit is decommissioned or was never submitted, then
+requires typing `delete` verbatim (a plain `y` isn't enough) before
+touching anything. No backup is made — `networks/` (public config) is
+untouched, but everything under `data/` is gone for good. Only run this
+if you're certain you don't need this validator's keys anymore.
 
-- `jocv reset` — `docker compose down --remove-orphans`. Leaves `data/`
-  and `.env` untouched; bring the node back with `jocv up` (or `jocv init`
-  if `.env` is gone). This is what `jocv init` points you to when it
-  refuses to overwrite an existing, non-empty `data/validator_keys/`.
-- `jocv reset --data` — also **permanently deletes** `data/` (keys,
-  deposit data, execution/consensus chain data) and `.env`. Prints exactly
-  what will be removed, asks you to confirm the deposit is decommissioned
-  or was never submitted, then requires typing `delete` verbatim (a plain
-  `y` isn't enough) before touching anything. No backup is made —
-  `networks/` (public config) is untouched, but everything under `data/`
-  is gone for good. Only run this if you're certain you don't need this
-  validator's keys anymore.
+Deliberately its own command rather than a `jocv down --data`/`--all`
+flag — no accidentally-omitted flag can turn a routine stop into an
+irreversible wipe. For just stopping containers (reversible, data/`.env`
+untouched), use `jocv down` instead — this is what `jocv init` points you
+to when it refuses to overwrite an existing, non-empty
+`data/validator_keys/`.
 
 ## Option 3 caveat (`el-cl`/`all` roles)
 
@@ -663,6 +664,15 @@ inferred/adapted or added — flagging it explicitly so you can double-check:
   through normal git review before the commit lands, not through a
   command prompt. Matches how eth-docker-style projects normally handle
   config updates.
+- **`jocv reset [--data]` → `jocv down` + `jocv destroy`.** Not from the
+  guide — a naming/safety cleanup. `jocv reset` (no flag) and `jocv down`
+  used to do almost the same thing (`docker compose down`, one with
+  `--remove-orphans`); folded the orphan-removal into `jocv down` and
+  dropped that redundant no-flag case entirely. The irreversible,
+  data-wiping case is now its own command, `jocv destroy`, instead of a
+  `--data` flag on `down` — so no accidentally-omitted flag can turn a
+  routine stop into a permanent wipe, and the name itself signals
+  "irreversible" instead of the more neutral-sounding "reset".
 
 No multi-validator support, no notifications, no client beyond
 `geth`+`lighthouse` — nothing was added beyond what was asked for.

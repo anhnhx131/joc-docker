@@ -404,7 +404,7 @@ EOF
     if [[ -d "$KEYS_DIR" ]] && [[ -n "$(ls -A "$KEYS_DIR" 2>/dev/null || true)" ]]; then
       warn "$KEYS_DIR already exists and is not empty."
       if ! confirm "Continue and reuse the existing directory (nothing will be deleted)?"; then
-        info "To start over instead: 'jocv reset --data' (permanently deletes"
+        info "To start over instead: 'jocv destroy' (permanently deletes"
         info "keys/deposit data/.env — only if you're sure you don't need them)."
         die "Aborted by user. Nothing was changed."
       fi
@@ -875,7 +875,10 @@ cmd_up() {
 }
 
 # --- jocv down -----------------------------------------------------------------------
-# Stop all service(s) started for the current ROLE.
+# Stop and remove this node's container(s) (--remove-orphans in case ROLE
+# or COMPOSE_FILE changed since the last 'jocv up'). Reversible: data/ and
+# .env are left untouched — bring the node back with 'jocv up'. For
+# permanently deleting keys/deposit data/.env instead, see 'jocv destroy'.
 cmd_down() {
   check_docker
   [[ -f "$ENV_FILE" ]] && load_env || true
@@ -885,7 +888,7 @@ cmd_down() {
   fi
   confirm "Stop the node now?" || die "Aborted."
 
-  ( cd "$JOCV_ROOT" && docker compose down )
+  ( cd "$JOCV_ROOT" && docker compose down --remove-orphans )
   success "Stopped. Start again with: jocv up"
 }
 
@@ -927,37 +930,21 @@ cmd_restart() {
   fi
 }
 
-# --- jocv reset [--data] ---------------------------------------------------------------
-# Stop and remove this node's docker resources, and optionally wipe its
-# data (keys, deposit data, execution/consensus chain data) and .env.
+# --- jocv destroy --------------------------------------------------------------------
+# Stop this node's containers AND permanently delete its data (keys,
+# deposit data, execution/consensus chain data) and .env. NOT reversible.
 #
-# Two tiers, on purpose:
-#   jocv reset          -> stop + remove containers only. Reversible.
-#   jocv reset --data   -> ALSO deletes data/ and .env. NOT reversible.
-cmd_reset() {
-  local wipe_data=false
-  case "${1:-}" in
-    --data | --all) wipe_data=true ;;
-    "") ;;
-    *) die "Usage: jocv reset [--data]" ;;
-  esac
-
+# Deliberately a separate command from 'jocv down' rather than a
+# '--data'/'--all' flag on it — no accidentally-omitted flag can turn a
+# routine stop into an irreversible wipe. For just stopping containers
+# (reversible), use 'jocv down' instead.
+cmd_destroy() {
   check_docker
-
-  info "Stopping and removing containers for this node..."
-  ( cd "$JOCV_ROOT" && docker compose down --remove-orphans )
-  success "Containers removed."
-
-  if [[ "$wipe_data" != true ]]; then
-    info "data/ and .env were left untouched."
-    info "Bring the node back with: jocv up  (or 'jocv init' if .env is gone)"
-    info "To also permanently delete keys/deposit data/.env: jocv reset --data"
-    return 0
-  fi
 
   echo >&2
   shout "=================================================================="
-  shout " 'jocv reset --data' will PERMANENTLY DELETE:"
+  shout " 'jocv destroy' will stop this node's containers AND PERMANENTLY"
+  shout " DELETE:"
   [[ -d "$KEYS_DIR" ]] && shout "   - $KEYS_DIR"
   shout "     (mnemonic-derived keystore, deposit_data-*.json, password.txt)"
   [[ -d "$DATA_DIR" ]] && shout "   - all of $DATA_DIR (execution/consensus chain data, jwt.hex)"
@@ -975,6 +962,9 @@ cmd_reset() {
 
   confirm_strict "Permanently delete $DATA_DIR and $ENV_FILE?" "delete" \
     || die "Confirmation text did not match. Aborted. Nothing was deleted."
+
+  info "Stopping and removing containers for this node..."
+  ( cd "$JOCV_ROOT" && docker compose down --remove-orphans )
 
   rm -rf "$DATA_DIR" "$ENV_FILE"
   success "Removed $DATA_DIR and $ENV_FILE. Run 'jocv init' to start fresh."
@@ -1037,8 +1027,9 @@ Usage:
                                     config.yaml update (Step 4-1) or similar;
                                     does NOT pick up compose file/.env changes
   jocv logs [service]              Follow a service's logs (execution|beacon|validator)
-  jocv reset [--data]              Stop + remove containers; with --data, also
-                                    PERMANENTLY delete keys/deposit data/.env
+  jocv destroy                     Stop containers AND PERMANENTLY delete
+                                    keys/deposit data/.env (NOT reversible —
+                                    separate from 'jocv down' on purpose)
 
   jocv upgrade                     Update this CLI itself via 'git pull' (code +
                                     any networks/ files your team commits, e.g.
@@ -1075,7 +1066,7 @@ main() {
     up)        cmd_up "$@" ;;
     down)      cmd_down "$@" ;;
     restart)   cmd_restart "$@" ;;
-    reset)     cmd_reset "$@" ;;
+    destroy)   cmd_destroy "$@" ;;
     logs)      cmd_logs "$@" ;;
     -h | --help | help | "")
       usage

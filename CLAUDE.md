@@ -25,9 +25,9 @@ self-review of what's guide-verbatim vs. inferred) before making changes.
   step that shows a secret once or deletes key material irreversibly,
   `chmod 600` on every key/secret file.
 - **Two surfaces, deliberately separate — don't merge them back together:**
-  - `jocv` — day-2 lifecycle CLI (install/init/validator/network/up/down/
-    logs/upgrade/reset). Single file on purpose (bash `source` doesn't give
-    real scoping anyway, see its header comment) — same pattern as
+  - `jocv` — day-2 lifecycle CLI (install/init/validator/up/down/restart/
+    logs/upgrade/destroy). Single file on purpose (bash `source` doesn't
+    give real scoping anyway, see its header comment) — same pattern as
     eth-docker's `ethd`.
   - `staking-deposit-cli.yml` + `staking-deposit-cli/*.sh` — standalone
     key-ceremony helper (`deposit-generate`, `validator-import`; guide
