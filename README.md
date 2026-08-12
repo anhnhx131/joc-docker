@@ -92,7 +92,7 @@ much smaller — no OS provisioning, no `.env` schema migration engine, and
 | --- | --- | --- |
 | `install` (installs Docker, OS packages, tunes the OS, adds user to `docker` group) | `jocv install` | Installs Docker Engine + compose plugin only (official apt repo on Ubuntu/Debian, best-effort dnf repo elsewhere), and adds your user to the `docker` group. Deliberately does **not** tune the OS (swappiness, noatime, chrony/NTP) or install unrelated packages — a tool that's about to handle your mnemonic shouldn't also be doing broad root-level OS provisioning. Shows every `sudo` command before running it and asks for confirmation once. Idempotent: no-ops if Docker is already installed and working. |
 | One `.yml` file per client (e.g. `lighthouse-vc-only.yml`), merged via `COMPOSE_FILE` | Same — `lighthouse-vc-only.yml`, `geth.yml`, `lighthouse-cl-only.yml`, merged via `COMPOSE_FILE` per `ROLE` | This one isn't simplified, just scoped down: eth-docker has ~5 EL × ~6 CL × addons; `jocv` has exactly the files today's `SUPPORTED_EL_CLIENTS`/`SUPPORTED_CL_CLIENTS` need. |
-| `config` (interactive `.env` wizard + schema migration across versions) | `jocv init` prompts (network/role) + `jocv validator address`/`beacon` | A handful of variables, not dozens — no schema to migrate. |
+| `config` (interactive `.env` wizard + schema migration across versions) | `jocv init` prompts (network/role) + `jocv validator config` | A handful of variables, not dozens — no schema to migrate. |
 | `up` | `jocv up` | Same idea: `docker compose up -d`, respecting `COMPOSE_FILE`. |
 | `down` / `stop` | `jocv down` | Same idea, with a guide-specific reminder not to stop while awaiting activation (Step 3-2). |
 | `logs` | `jocv logs [service]` | Same idea: `docker compose logs -f`. Asks which service if more than one is active. |
@@ -134,7 +134,7 @@ much smaller — no OS provisioning, no `.env` schema migration engine, and
 #             and note the BCCloud node's IP address
 # ------------------------------------------------------------------------
 
-./jocv validator beacon http://<bccloud-validator-node-ip>:3500
+./jocv validator config beacon http://<bccloud-validator-node-ip>:3500
 ./jocv status         # guide Step 3-2
 ```
 
@@ -306,25 +306,32 @@ structural pattern — a dedicated "tools"-profile compose service plus its
 own entrypoint script, instead of a raw `docker run` in a host script —
 and the chown-back-to-host-user convention described above.
 
-### `jocv validator address [<0x...>]`
+### `jocv validator config [<key> [<value>]]`
 
-For an already-initialized node with `ROLE=validator`/`all`. No argument:
-prints the current `WITHDRAWAL_ADDRESS`. With an address: validates it,
-writes it to `.env`, then offers to apply via `docker compose up -d`.
-Doesn't touch keys, `NETWORK`, or `ROLE` — those are fixed at `jocv init`
-time (see above). Refuses for `ROLE=el-cl` (no Validator Client, nothing
-to set).
+Single, extensible entry point for validator-scoped settings, for an
+already-initialized node with `ROLE=validator`/`all` (refuses for
+`ROLE=el-cl` — no Validator Client, nothing to view/set). Doesn't touch
+keys, `NETWORK`, or `ROLE` — those are fixed at `jocv init` time (see
+above).
 
-### `jocv validator beacon [<url>]`
+- `jocv validator config` — prints every known key's current value.
+- `jocv validator config <key>` — prints just that one.
+- `jocv validator config <key> <value>` — validates, writes it to `.env`,
+  then offers to apply via `docker compose up -d`.
 
-No argument: prints the current `BEACON_URL`. With a URL: points the
-Validator Client at a Consensus Client / Beacon Node HTTP API and applies
-immediately (`docker compose up -d`, recreating the `validator`
-container) — BCCloud in guide Step 2-7, or a new endpoint for a Step 4
-hard fork change. For `ROLE=all` it warns first (you're normally pointed
-at your own local `beacon` service automatically) and asks you to confirm
-before overriding. Refuses for `ROLE=el-cl` (no Validator Client runs in
-that role).
+Known keys today:
+
+| Key | Env var | Notes |
+| --- | --- | --- |
+| `address` | `WITHDRAWAL_ADDRESS` | Guide Step 2-7's `--suggested-fee-recipient`. |
+| `beacon` | `BEACON_URL` | The Consensus Client the Validator Client connects to — BCCloud in guide Step 2-7, or a new endpoint for a Step 4 hard fork change. For `ROLE=all` it warns first (you're normally pointed at your own local `beacon` service automatically) and asks you to confirm before overriding. |
+
+Adding a future key (e.g. graffiti) is meant to be a small, additive
+change: one more entry in `jocv`'s `VALIDATOR_CONFIG_KEYS` array plus one
+case arm each in `_validator_config_show()`/`_validator_config_set()` —
+the view-all/view-one/confirm-and-apply flow above stays exactly the
+same, so `jocv validator config` never grows a new top-level command per
+setting.
 
 ### `jocv validator deposit-data`
 
@@ -630,12 +637,16 @@ inferred/adapted or added — flagging it explicitly so you can double-check:
   with one `cmd_<name>()` function per subcommand instead of one process
   per file. Not from the guide or from eth-docker's exact layout, but
   deliberately modeled on `ethd`'s single-file shape.
-- **`jocv validator <address|beacon|deposit-data>` namespace**, replacing
-  the earlier flat `jocv config` + `jocv beacon set <url>`. Not from the
-  guide — a UX cleanup: those two commands overlapped (both could set
-  `BEACON_URL`), and `jocv validator deposit-data` is new (previously the
-  deposit data was only ever printed once, at `jocv init` time). Also
-  renamed `jocv update-config <phase>` → `jocv network apply <phase>` and
+- **`jocv validator config [<key> [<value>]]` + `jocv validator
+  deposit-data`**, replacing the earlier flat `jocv config` + `jocv
+  beacon set <url>`. Not from the guide — a UX cleanup: those two
+  commands overlapped (both could set `BEACON_URL`), and `jocv validator
+  deposit-data` is new (previously the deposit data was only ever printed
+  once, at `jocv init` time). `validator config` is a key/value dispatch
+  (`VALIDATOR_CONFIG_KEYS` array + a case arm per key) rather than one
+  subcommand per setting, specifically so a future setting doesn't need a
+  new top-level command. Also renamed `jocv update-config <phase>` →
+  `jocv network apply <phase>` and
   `jocv update` → `jocv upgrade`, since the old `update`/`update-config`
   pair read as two variants of the same command when they do unrelated
   things (this CLI's own code vs. the network's consensus config).

@@ -59,7 +59,7 @@ Full detail: [README.md](README.md#what-this-is-not).
 ### 6. Connect to BCCloud
 
 ```bash
-./jocv validator beacon http://<bccloud-node-ip>:3500
+./jocv validator config beacon http://<bccloud-node-ip>:3500
 ```
 
 ### 7. Verify
@@ -74,8 +74,8 @@ deposit-data`.
 
 ## Next
 
-- `./jocv validator address` / `./jocv validator beacon` — view or change
-  withdrawal address / beacon URL later
+- `./jocv validator config` — view all validator settings; `./jocv
+  validator config address <0x...>` / `config beacon <url>` to change one
 - `./jocv validator deposit-data` — reprint the deposit data for Step 3-1
 - `./jocv network apply <phase>` — apply a hard fork phase config
 - `./jocv upgrade` — pull the latest CLI/config from git

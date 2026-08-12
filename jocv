@@ -575,7 +575,7 @@ EOF
     info "BEACON_URL auto-set to the local beacon service (http://beacon:5052)."
   elif [[ "$ROLE" == "validator" ]] && ! grep -q '^BEACON_URL=http://beacon:5052$' "$ENV_FILE"; then
     warn "BEACON_URL is a safe local placeholder until you run:"
-    warn "  jocv validator beacon http://<bccloud-node-ip>:3500"
+    warn "  jocv validator config beacon http://<bccloud-node-ip>:3500"
     warn "once Step 2-3~2-5 are done on BCCloud."
   fi
 
@@ -618,27 +618,47 @@ EOF
   echo "================================================================" >&2
 }
 
-# --- jocv validator address [<0x...>] -----------------------------------------------
-# View or change WITHDRAWAL_ADDRESS (guide Step 2-7's
-# --suggested-fee-recipient). No argument: print the current value. With
-# an argument: validate, write it, offer to apply. Doesn't touch keys —
-# for first-time setup (including key generation), use 'jocv init'.
-cmd_validator_address() {
+# --- jocv validator config [<key> [<value>]] ----------------------------------------
+# Single, extensible entry point for validator-scoped settings — no
+# argument: print every known key's current value. One key, no value:
+# print just that one. Key + value: validate, write to .env, offer to
+# apply. Doesn't touch keys — for first-time setup (including key
+# generation), use 'jocv init'.
+#
+# Adding a new setting later (e.g. graffiti) means adding its name to
+# VALIDATOR_CONFIG_KEYS below plus one case arm each in
+# _validator_config_show()/_validator_config_set() — cmd_validator_config
+# itself (the view-all/view-one/confirm-and-apply flow) never changes.
+# Keep this array as the single source of truth, same spirit as the
+# SUPPORTED_* allow-lists above.
+VALIDATOR_CONFIG_KEYS=(address beacon)
+
+cmd_validator_config() {
   [[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found. Run 'jocv init' first."
   load_env
   local role="${ROLE:-validator}"
   [[ "$role" == "validator" || "$role" == "all" ]] \
-    || die "ROLE=$role runs no Validator Client — there is no withdrawal address to view/set."
+    || die "ROLE=$role runs no Validator Client — there is nothing here to view/set."
 
-  local new_addr="${1:-}"
-  if [[ -z "$new_addr" ]]; then
-    echo "WITHDRAWAL_ADDRESS = ${WITHDRAWAL_ADDRESS:-<unset>}" >&2
+  local key="${1:-}" value="${2:-}"
+
+  if [[ -z "$key" ]]; then
+    local k
+    for k in "${VALIDATOR_CONFIG_KEYS[@]}"; do
+      _validator_config_show "$k"
+    done
     return 0
   fi
 
-  is_valid_eth_address "$new_addr" || die "Invalid address. Expected 0x + 40 hex characters."
-  set_env_var "WITHDRAWAL_ADDRESS" "$new_addr"
-  success "WITHDRAWAL_ADDRESS updated in $ENV_FILE."
+  _list_contains "$key" "${VALIDATOR_CONFIG_KEYS[@]}" \
+    || die "Unknown key '$key'. Known keys: ${VALIDATOR_CONFIG_KEYS[*]}"
+
+  if [[ -z "$value" ]]; then
+    _validator_config_show "$key"
+    return 0
+  fi
+
+  _validator_config_set "$key" "$value"
 
   check_docker
   if confirm "Apply now via 'docker compose up -d'?"; then
@@ -649,47 +669,45 @@ cmd_validator_address() {
   fi
 }
 
-# --- jocv validator beacon [<url>] --------------------------------------------------
-# View or change BEACON_URL — the Consensus Client / Beacon Node HTTP API
-# the Validator Client connects to. No argument: print the current value.
-# With a URL: validate, write it, apply immediately (recreates the
-# validator container). Used at two points in the guide, sharing the same
-# mechanism for both:
-#   - Step 2-7: first connection to the Consensus Client on BCCloud, after
-#     Step 2-5 opens the Consensus HTTP API (e.g. http://<node-ip>:3500).
-#   - Step 4-1: whenever the BCCloud endpoint needs to change as part of a
-#     hard fork phase rollout.
-cmd_validator_beacon() {
-  [[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found. Run 'jocv init' first."
-  load_env
-  local role="${ROLE:-validator}"
-  [[ "$role" != "el-cl" ]] \
-    || die "ROLE=el-cl runs no Validator Client — there is no beacon URL to view/set."
+# Prints one key's current value + any relevant caveat. Guide references:
+# 'address' is Step 2-7's --suggested-fee-recipient; 'beacon' is the
+# Consensus Client the Validator Client connects to (Step 2-7 initial
+# connection / Step 4-1 endpoint changes).
+_validator_config_show() {
+  case "$1" in
+    address) echo "address = ${WITHDRAWAL_ADDRESS:-<unset>}" >&2 ;;
+    beacon)
+      echo "beacon  = ${BEACON_URL:-<unset>}" >&2
+      [[ "${ROLE:-validator}" == "all" ]] \
+        && info "ROLE=all: auto-managed, normally points at the local 'beacon' service."
+      ;;
+  esac
+}
 
-  local beacon_url="${1:-}"
-  if [[ -z "$beacon_url" ]]; then
-    echo "BEACON_URL = ${BEACON_URL:-<unset>}" >&2
-    [[ "$role" == "all" ]] \
-      && info "ROLE=all: auto-managed, normally points at the local 'beacon' service."
-    return 0
-  fi
-
-  is_valid_url "$beacon_url" || die "Invalid URL: '$beacon_url' (expected http(s)://host[:port][/path])"
-
-  if [[ "$role" == "all" ]]; then
-    warn "ROLE=all: BEACON_URL is normally auto-managed to point at the local"
-    warn "'beacon' service (http://beacon:5052). Overriding it here means your"
-    warn "Validator Client will stop talking to your own beacon node."
-    confirm "Set BEACON_URL to '$beacon_url' anyway?" || die "Aborted. Nothing was changed."
-  fi
-
-  set_env_var "BEACON_URL" "$beacon_url"
-  success "BEACON_URL set to $beacon_url in $ENV_FILE"
-
-  check_docker
-  info "Applying via docker compose up -d (recreates the validator container with the new value)..."
-  ( cd "$JOCV_ROOT" && docker compose up -d )
-  success "Done. Check status with: jocv status"
+# Validates + writes one key's new value to .env. This is the only place
+# that needs to know a given key's validation rule / ROLE-specific
+# caveat — cmd_validator_config's ROLE=el-cl guard above already covers
+# every key, so no per-key el-cl check is needed here.
+_validator_config_set() {
+  local key="$1" value="$2"
+  case "$key" in
+    address)
+      is_valid_eth_address "$value" || die "Invalid address. Expected 0x + 40 hex characters."
+      set_env_var "WITHDRAWAL_ADDRESS" "$value"
+      success "address updated in $ENV_FILE."
+      ;;
+    beacon)
+      is_valid_url "$value" || die "Invalid URL: '$value' (expected http(s)://host[:port][/path])"
+      if [[ "${ROLE:-validator}" == "all" ]]; then
+        warn "ROLE=all: BEACON_URL is normally auto-managed to point at the local"
+        warn "'beacon' service (http://beacon:5052). Overriding it here means your"
+        warn "Validator Client will stop talking to your own beacon node."
+        confirm "Set beacon to '$value' anyway?" || die "Aborted. Nothing was changed."
+      fi
+      set_env_var "BEACON_URL" "$value"
+      success "beacon updated in $ENV_FILE."
+      ;;
+  esac
 }
 
 # --- jocv validator deposit-data -----------------------------------------------------
@@ -1059,12 +1077,11 @@ Usage:
                                     (validator|el-cl|all), then runs the
                                     matching guide steps (Step 2 for 'validator')
 
-  jocv validator address [<0x...>] View, or set + apply, WITHDRAWAL_ADDRESS
-                                    (validator/all only)
-  jocv validator beacon [<url>]    View, or set + apply, BEACON_URL — the
-                                    Consensus Client the Validator Client talks
-                                    to (Step 2-7 initial connection / Step 4
-                                    changes; not for ROLE=el-cl)
+  jocv validator config [<key> [<value>]]
+                                    View all validator settings, one key, or
+                                    set + apply one (keys: address, beacon —
+                                    'jocv validator config' with no args
+                                    lists all of them; validator/all only)
   jocv validator deposit-data      Reprint the deposit_data-*.json path +
                                     contents from 'jocv init' (Step 3-1)
 
@@ -1101,11 +1118,10 @@ main() {
       local sub="${1:-}"
       [[ $# -gt 0 ]] && shift || true
       case "$sub" in
-        address)      cmd_validator_address "$@" ;;
-        beacon)       cmd_validator_beacon "$@" ;;
+        config)       cmd_validator_config "$@" ;;
         deposit-data) cmd_validator_deposit_data "$@" ;;
         *)
-          echo "Usage: jocv validator <address [<0x...>]|beacon [<url>]|deposit-data>" >&2
+          echo "Usage: jocv validator <config [<key> [<value>]]|deposit-data>" >&2
           exit 1
           ;;
       esac
