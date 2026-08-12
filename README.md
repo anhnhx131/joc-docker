@@ -3,10 +3,11 @@
 日本語版: [README.ja.md](README.ja.md)
 
 A small bash-only CLI for running a **JOC (Japan Open Chain) PoSA
-Validator Client** on infrastructure you control (guide Option 2). See
-[CLAUDE.md](CLAUDE.md) for architecture, guide-fidelity notes, the full
-security model, and the complete self-review of what's guide-verbatim
-vs. inferred.
+Validator Client only** on infrastructure you control (guide Option 2) —
+no self-hosted Execution/Consensus Client, just the Validator Client
+piece. See [CLAUDE.md](CLAUDE.md) for architecture, guide-fidelity
+notes, the full security model, and the complete self-review of what's
+guide-verbatim vs. inferred.
 
 ## Prerequisites
 
@@ -18,31 +19,28 @@ vs. inferred.
   JOC PoSA network) already done.
 - A private, offline way to write down a mnemonic phrase.
 
-## Quick start
+## Quick start (Validator Client only)
 
 ```bash
 git clone git@github.com:anhnhx131/joc-docker.git
 cd joc-docker
 ./jocv install       # installs Docker if missing
-```
-
-Get `config.yaml` + `deposit_contract_block.txt` for your network (from
-the [JOC page](https://www.japanopenchain.org/vi/docs/developer/connect-joc/mainnet/)
-or your team) and place them at `networks/mainnet/cl/` (swap `mainnet`
-for `testnet`/`sandbox` as needed — see [networks/README.md](networks/README.md)).
-
-```bash
 ./jocv init
 ```
 
-Prompts for your network and withdrawal address, then generates your
-mnemonic/keys and starts the Validator Client. **The mnemonic is shown
-once — write it down on paper before typing `yes` to continue.** Never
-share it, the keystore, or `password.txt` with anyone.
+`networks/<NETWORK>/cl/` already ships the network config this repo
+maintains — if it's ever missing or out of date for your network, `jocv
+init` tells you exactly what's missing and where to get it, so there's
+nothing to fetch by hand up front.
 
-On BCCloud (manual — create a Transaction Cluster, add an External
-Validator node with the `pubkey` from `deposit_data-xxx.json`, open the
-Consensus HTTP API to this machine), then connect:
+`jocv init` prompts for your network and withdrawal address, then
+generates your mnemonic/keys and starts the Validator Client. **The
+mnemonic is shown once — write it down on paper before typing `yes` to
+continue.** Never share it, the keystore, or `password.txt` with anyone.
+
+The validator starts with `BEACON_URL` pointed at an inert placeholder —
+it won't attest until you set it to your real Consensus Client endpoint
+(e.g. the BCCloud node opened in guide Step 2-5):
 
 ```bash
 ./jocv validator config beacon http://<bccloud-node-ip>:3500

@@ -2,10 +2,11 @@
 
 English: [README.md](README.md)
 
-**JOC (Japan Open Chain) PoSA Validator Client** を自分で管理するインフラ上で
-動かすための、bash 製の小さな CLI です（ガイドの Option 2 に対応）。
-アーキテクチャ、ガイドとの対応関係、セキュリティモデル、ガイドから逸脱・推測した
-点の詳細な自己レビューは [CLAUDE.md](CLAUDE.md) を参照してください。
+**JOC (Japan Open Chain) PoSA Validator Client のみ** を自分で管理するインフラ
+上で動かすための、bash 製の小さな CLI です（ガイドの Option 2 に対応） —
+自前の Execution/Consensus Client は動かさず、Validator Client 部分のみを
+扱います。アーキテクチャ、ガイドとの対応関係、セキュリティモデル、ガイドから
+逸脱・推測した点の詳細な自己レビューは [CLAUDE.md](CLAUDE.md) を参照してください。
 
 ## 前提条件
 
@@ -17,32 +18,29 @@ English: [README.md](README.md)
   ネットワークへの参加）が完了していること。
 - ニーモニックフレーズをオフラインで安全に書き留める手段。
 
-## クイックスタート
+## クイックスタート（Validator Client のみ）
 
 ```bash
 git clone git@github.com:anhnhx131/joc-docker.git
 cd joc-docker
 ./jocv install       # Docker が未インストールならインストール
-```
-
-ご自身のネットワーク用の `config.yaml` と `deposit_contract_block.txt` を
-（[JOC のページ](https://www.japanopenchain.org/vi/docs/developer/connect-joc/mainnet/)
-またはチームから取得し）`networks/mainnet/cl/` に配置してください
-（`mainnet` は必要に応じて `testnet`/`sandbox` に置き換え — 詳細は
-[networks/README.md](networks/README.md)）。
-
-```bash
 ./jocv init
 ```
 
-ネットワークと withdrawal address の入力を求められた後、ニーモニック/キーを
-生成し、Validator Client を起動します。**ニーモニックは一度だけ表示されます —
-`yes` と入力して続行する前に、必ず紙に書き留めてください。** ニーモニック、
-keystore、`password.txt` は誰にも共有しないでください。
+`networks/<NETWORK>/cl/` にはこのリポジトリが管理しているネットワーク設定が
+既に入っています。ご利用のネットワーク分が無い/古い場合は、`jocv init` が
+不足しているものと取得方法を明示してくれるので、事前に自分で取得しておく
+必要はありません。
 
-BCCloud 側の作業（手動 — Transaction Cluster の作成、`deposit_data-xxx.json`
-の `pubkey` を使った External Validator ノードの追加、このマシンへの
-Consensus HTTP API の公開）を行った後、接続します:
+`jocv init` はネットワークと withdrawal address の入力を求めた後、
+ニーモニック/キーを生成し、Validator Client を起動します。**ニーモニックは
+一度だけ表示されます — `yes` と入力して続行する前に、必ず紙に書き留めて
+ください。** ニーモニック、keystore、`password.txt` は誰にも共有しないで
+ください。
+
+Validator は `BEACON_URL` が無効なプレースホルダーの状態で起動します —
+実際の Consensus Client のエンドポイント（例: ガイド Step 2-5 で開いた
+BCCloud ノード）を設定するまで、attest は行われません:
 
 ```bash
 ./jocv validator config beacon http://<bccloud-node-ip>:3500

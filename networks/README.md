@@ -25,8 +25,8 @@ fork epochs) — safe to commit to git, unlike `data/` or `.env`.
   2-1: download from the JOC page
   (https://www.japanopenchain.org/vi/docs/developer/connect-joc/mainnet/)
   or receive from JBF/admin, and place here (or commit them here so
-  validators get them via `git pull` — see the root README's
-  ["Updating config via git"](../README.md#updating-config-via-git)).
+  validators get them via `git pull` — see `CLAUDE.md`'s
+  ["Updating config via git"](../CLAUDE.md#updating-config-via-git)).
   A new Tokyo Hard Fork phase (guide Step 4) works the same way: your team
   overwrites this same `config.yaml` in place with the new phase's
   content and commits it — there is no separate per-phase file/directory.
@@ -46,6 +46,6 @@ Self-hosting your own Execution + Consensus Client (guide Option 3, which
 the official guide itself doesn't document — "Organizations selecting
 Option 3 should contact us directly") used to have a matching `el/`
 subdirectory here (`genesis.json`, `bootnodes.txt`) plus a `cl/bootnodes.txt`,
-for `ROLE=el-cl`/`all`. Removed along with that role — see the root
-README. `ROLE=validator`'s Validator Client only talks HTTP to an
+for `ROLE=el-cl`/`all`. Removed along with that role — see `CLAUDE.md`'s
+Self-review. `ROLE=validator`'s Validator Client only talks HTTP to an
 external Consensus Client (BCCloud), so it needs neither.
