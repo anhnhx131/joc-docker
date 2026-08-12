@@ -518,6 +518,13 @@ EOF
       done
     fi
     export VALIDATOR_WITHDRAWAL_ADDRESS
+    # staking-deposit-cli.yml's `${WITHDRAWAL_ADDRESS:?...}` is resolved by
+    # docker compose while it PARSES the compose file — from the calling
+    # shell's environment / .env, never from a `run -e` flag (that only
+    # overrides the container's runtime env, applied after parsing
+    # succeeds). So this must be a real exported var named exactly
+    # WITHDRAWAL_ADDRESS, not just passed via -e below.
+    export WITHDRAWAL_ADDRESS="$VALIDATOR_WITHDRAWAL_ADDRESS"
 
     # All three networks (mainnet/testnet/sandbox) share the same
     # ethstaker-deposit-cli chain config — the generate-entrypoint hardcodes
@@ -525,7 +532,6 @@ EOF
     # NETWORK is already exported above, so staking-deposit-cli.yml's
     # ${NETWORK} volume interpolation (validator-import) resolves correctly.
     docker compose -f "$JOCV_ROOT/staking-deposit-cli.yml" run --rm \
-      -e WITHDRAWAL_ADDRESS="$VALIDATOR_WITHDRAWAL_ADDRESS" \
       -e HOST_UID="$(id -u)" \
       -e HOST_GID="$(id -g)" \
       deposit-generate
