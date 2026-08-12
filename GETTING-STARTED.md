@@ -77,8 +77,8 @@ deposit-data`.
 - `./jocv validator config` — view all validator settings; `./jocv
   validator config address <0x...>` / `config beacon <url>` to change one
 - `./jocv validator deposit-data` — reprint the deposit data for Step 3-1
-- `./jocv network apply <phase>` — apply a hard fork phase config
-- `./jocv upgrade` — pull the latest CLI/config from git
+- `./jocv upgrade` then `./jocv restart` — pull a new hard fork
+  `config.yaml` (or any other update) from git, then apply it
 - `./jocv logs` / `./jocv down` — day-to-day operation
 - `./jocv reset --data` — wipe keys/deposit data/`.env` to start over (irreversible)
 

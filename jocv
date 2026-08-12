@@ -180,7 +180,6 @@ EOF
 network_dir()        { echo "$NETWORKS_DIR/$1"; }
 network_el_dir()     { echo "$NETWORKS_DIR/$1/el"; }
 network_cl_dir()     { echo "$NETWORKS_DIR/$1/cl"; }
-network_phases_dir() { echo "$NETWORKS_DIR/$1/cl/phases"; }
 
 # set_env_var KEY VALUE — create or update a KEY=VALUE line in $ENV_FILE.
 set_env_var() {
@@ -784,111 +783,16 @@ cmd_status() {
   [[ "$overall_ok" == true ]] || return 1
 }
 
-# --- jocv network apply <phase> -------------------------------------------------------
-# Guide Step 4: apply a new hard fork phase's consensus config to an
-# already-running node. Never runs `git pull` itself and never fetches a
-# config over the network on its own — pulling in a new consensus config
-# is a human-reviewed action, not something to automate silently.
-# (Named deliberately differently from 'jocv upgrade' — that updates this
-# CLI's own code via git; this updates the network's consensus config.)
-cmd_network_apply() {
-  local phase="${1:-}"
-  [[ -n "$phase" ]] || die "Usage: jocv network apply <phase-label>   (e.g. tokyo-phase-2)"
-
-  [[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found. Run 'jocv init' first."
-  load_env
-  local network="${NETWORK:-}"
-  is_supported_network "$network" || die "$ENV_FILE has no valid NETWORK set. Run 'jocv init' first."
-  local role="${ROLE:-validator}"
-
-  shout "=================================================================="
-  shout " Only run this AFTER an official announcement from JBF / admin."
-  shout " Do not update the config or restart the node on your own"
-  shout " initiative (guide, Step 4-1 Note)."
-  shout "=================================================================="
-
-  if [[ -d "$JOCV_ROOT/.git" ]] && command -v git >/dev/null 2>&1; then
-    info "Repo state: $(git -C "$JOCV_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown) on $(git -C "$JOCV_ROOT" branch --show-current 2>/dev/null || echo unknown)"
-    info "If your team commits phase configs to this repo, make sure you've"
-    info "run 'git pull' and reviewed the diff before continuing."
-  fi
-
-  confirm "Has JBF / admin officially announced phase '$phase' for network '$network'?" || die "Aborted."
-
-  check_docker
-
-  local cl_dir phase_config fallback_config new_config
-  cl_dir="$(network_cl_dir "$network")"
-  phase_config="$(network_phases_dir "$network")/$phase/config.yaml"
-  fallback_config="$cl_dir/config.yaml"
-
-  if [[ -f "$phase_config" ]]; then
-    new_config="$phase_config"
-    info "Using phase-specific config: $new_config"
-  elif [[ -f "$fallback_config" ]]; then
-    new_config="$fallback_config"
-    warn "No phase-specific file at $phase_config."
-    warn "Falling back to $fallback_config — make sure this is really the"
-    warn "config for phase '$phase' and not a stale/unrelated one."
-  else
-    cat >&2 <<EOF
-
-No config found for phase '$phase' on network '$network'. Expected one of:
-  $phase_config
-  $fallback_config
-
-If your team version-controls configs in this repo:
-  1. git pull
-  2. Confirm the file above now exists.
-
-Otherwise, get it from JBF/admin (Step 4-1, item 3) and place it at one of
-the paths above.
-
-Then re-run: jocv network apply $phase
-EOF
-    die "Config not found for phase '$phase'."
-  fi
-
-  local checksum
-  checksum="$(sha256_of "$new_config")"
-  echo >&2
-  info "About to apply: $new_config"
-  info "SHA-256: $checksum"
-  shout "Verify this checksum/file matches the official config for phase '$phase'"
-  shout "(the JOC page, or whatever JBF shared) BEFORE confirming below."
-  confirm "Confirmed this config is correct for phase '$phase' and safe to apply?" \
-    || die "Aborted — verify the config against the official source, then retry."
-
-  if [[ -f "$fallback_config" && "$new_config" != "$fallback_config" ]]; then
-    cp "$fallback_config" "$cl_dir/config.yaml.bak.$phase"
-    info "Backed up previous config to config.yaml.bak.$phase"
-  fi
-  cp "$new_config" "$cl_dir/config.yaml"
-  success "Updated $cl_dir/config.yaml for phase '$phase'."
-
-  # Restart whichever containers actually read this config, based on ROLE.
-  local restart_targets=()
-  [[ "$role" == "validator" || "$role" == "all" ]] && restart_targets+=("validator")
-  [[ "$role" == "el-cl" || "$role" == "all" ]] && restart_targets+=("beacon")
-
-  info "Restarting: ${restart_targets[*]} (docker compose restart)..."
-  ( cd "$JOCV_ROOT" && docker compose restart "${restart_targets[@]}" )
-  success "Done. Check with: jocv status"
-
-  warn "Per the guide: after 5-10 minutes, if 'Not attesting' keeps appearing for"
-  warn "more than 15-20 minutes, the validator is not operating properly."
-  warn "Also check the logs for critical errors (Step 4-1, Note)."
-}
-
 # --- jocv upgrade ----------------------------------------------------------------------
 # Update this CLI itself (this file, the per-client *.yml compose files,
-# and any networks/ files your team commits) via `git pull`. Loosely
-# modeled on eth-docker's `ethd update`, but much simpler: no OS package
-# management, no .env migration, no automatic container restart or config
-# apply. Named 'upgrade' rather than 'update' specifically to not collide
-# with 'jocv network apply' (which updates the network's consensus config,
-# not this CLI's code) — the two used to be confusingly-similarly-named
-# 'update'/'update-config'.
+# and any networks/ files your team commits — including
+# networks/<NETWORK>/cl/config.yaml, e.g. for a new hard fork phase) via
+# `git pull`. Loosely modeled on eth-docker's `ethd update`, but much
+# simpler: no OS package management, no .env migration, no automatic
+# container restart or config apply — applying a pulled-in config.yaml
+# change is a deliberate follow-up step ('jocv restart'), not automatic.
+# Named 'upgrade' rather than 'update' to avoid the old, confusingly
+# similar 'update'/'update-config' pair this project used to have.
 cmd_upgrade() {
   [[ -d "$JOCV_ROOT/.git" ]] \
     || die "$JOCV_ROOT is not a git checkout. Clone this repo with 'git clone' to use 'jocv upgrade'."
@@ -926,8 +830,8 @@ cmd_upgrade() {
   # node, so we can tell you what to do next instead of acting on it.
   local compose_changed
   compose_changed="$(git diff --name-only "HEAD..origin/$branch" -- '*.yml' || true)"
-  local phases_changed el_cl_changed
-  phases_changed="$(git diff --name-only "HEAD..origin/$branch" -- 'networks/*/cl/phases/' || true)"
+  local cl_config_changed el_cl_changed
+  cl_config_changed="$(git diff --name-only "HEAD..origin/$branch" -- 'networks/*/cl/config.yaml' || true)"
   el_cl_changed="$(git diff --name-only "HEAD..origin/$branch" -- 'networks/*/el/' || true)"
 
   git pull --ff-only origin "$branch"
@@ -938,11 +842,12 @@ cmd_upgrade() {
     echo "$compose_changed" | sed 's/^/  /' >&2
     warn "Review the diff, then run 'jocv up' to apply."
   fi
-  if [[ -n "$phases_changed" ]]; then
-    warn "New/changed phase config(s) pulled in:"
-    echo "$phases_changed" | sed 's/^/  /' >&2
-    warn "Run 'jocv network apply <phase>' for the relevant phase once JBF/admin"
-    warn "officially announces it — do not apply on your own initiative."
+  if [[ -n "$cl_config_changed" ]]; then
+    warn "Consensus config changed (likely a new hard fork phase):"
+    echo "$cl_config_changed" | sed 's/^/  /' >&2
+    warn "Confirm your team verified this against the official JBF/admin"
+    warn "source, then run 'jocv restart' so the validator/beacon"
+    warn "container(s) pick it up (bind-mounted, no rebuild needed)."
   fi
   if [[ -n "$el_cl_changed" ]]; then
     warn "Execution-layer network file(s) changed (genesis/bootnodes):"
@@ -982,6 +887,44 @@ cmd_down() {
 
   ( cd "$JOCV_ROOT" && docker compose down )
   success "Stopped. Start again with: jocv up"
+}
+
+# --- jocv restart [service] -----------------------------------------------------------
+# `docker compose restart` for whichever service(s) the current ROLE
+# runs, or just one if named. Restarts the existing container(s) in
+# place — re-reads any bind-mounted file that changed on disk (e.g.
+# networks/<NETWORK>/cl/config.yaml after a hard fork config update
+# pulled in via 'jocv upgrade' — guide Step 4-1's "sudo docker restart
+# validator"). Does NOT recreate containers: a changed compose file or
+# .env value needs 'jocv up' instead, not this (see README.md).
+cmd_restart() {
+  check_docker
+  [[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found. Run 'jocv init' first."
+  load_env
+  local role="${ROLE:-validator}"
+
+  local active=()
+  [[ "$role" == "validator" || "$role" == "all" ]] && active+=("validator")
+  [[ "$role" == "el-cl" || "$role" == "all" ]] && active+=("execution" "beacon")
+
+  local service="${1:-}" targets=()
+  if [[ -n "$service" ]]; then
+    _list_contains "$service" "${active[@]}" \
+      || die "Service '$service' is not active for ROLE=$role. Active: ${active[*]}"
+    targets=("$service")
+  else
+    targets=("${active[@]}")
+  fi
+
+  info "Restarting: ${targets[*]}..."
+  ( cd "$JOCV_ROOT" && docker compose restart "${targets[@]}" )
+  success "Done. Check with: jocv status"
+
+  if [[ "$role" == "validator" || "$role" == "all" ]] \
+    && { [[ -z "$service" ]] || [[ "$service" == "validator" ]]; }; then
+    warn "Per the guide: after 5-10 minutes, if 'Not attesting' keeps appearing"
+    warn "for more than 15-20 minutes, the validator is not operating properly."
+  fi
 }
 
 # --- jocv reset [--data] ---------------------------------------------------------------
@@ -1085,20 +1028,21 @@ Usage:
   jocv validator deposit-data      Reprint the deposit_data-*.json path +
                                     contents from 'jocv init' (Step 3-1)
 
-  jocv network apply <phase>       Apply a new hard fork phase's consensus
-                                    config for the current NETWORK (Step 4)
-
   jocv status                      Check whichever service(s) ROLE runs (Step
                                     3-2 for the validator container)
   jocv up                          Start/apply whichever service(s) ROLE needs
+                                    (also picks up compose file/.env changes)
   jocv down                        Stop them
+  jocv restart [service]           docker compose restart — for a hard fork
+                                    config.yaml update (Step 4-1) or similar;
+                                    does NOT pick up compose file/.env changes
   jocv logs [service]              Follow a service's logs (execution|beacon|validator)
   jocv reset [--data]              Stop + remove containers; with --data, also
                                     PERMANENTLY delete keys/deposit data/.env
 
   jocv upgrade                     Update this CLI itself via 'git pull' (code +
-                                    any networks/ files your team commits) —
-                                    NOT the same as 'jocv network apply'
+                                    any networks/ files your team commits, e.g.
+                                    a new networks/<NETWORK>/cl/config.yaml)
 
 Run 'jocv <command>' with no further arguments for command-specific usage.
 See README.md for the full walkthrough, the ROLE/NETWORK/CLIENT model,
@@ -1126,21 +1070,11 @@ main() {
           ;;
       esac
       ;;
-    network)
-      local sub="${1:-}"
-      [[ $# -gt 0 ]] && shift || true
-      case "$sub" in
-        apply) cmd_network_apply "$@" ;;
-        *)
-          echo "Usage: jocv network apply <phase>" >&2
-          exit 1
-          ;;
-      esac
-      ;;
     status)    cmd_status "$@" ;;
     upgrade)   cmd_upgrade "$@" ;;
     up)        cmd_up "$@" ;;
     down)      cmd_down "$@" ;;
+    restart)   cmd_restart "$@" ;;
     reset)     cmd_reset "$@" ;;
     logs)      cmd_logs "$@" ;;
     -h | --help | help | "")

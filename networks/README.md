@@ -12,9 +12,7 @@ networks/
 │       ├── config.yaml               # currently-applied consensus config
 │       ├── deposit_contract_block.txt
 │       ├── genesis.ssz               # optional: precomputed genesis state
-│       ├── bootnodes.txt             # CL bootnodes (ENRs), one per line
-│       └── phases/
-│           └── <phase>/config.yaml   # snapshot per Tokyo Hard Fork phase
+│       └── bootnodes.txt             # CL bootnodes (ENRs), one per line
 ├── testnet/    (same layout)
 └── sandbox/    (same layout)
 ```
@@ -33,8 +31,12 @@ bootnodes, fork epochs) — safe to commit to git, unlike `data/` or `.env`.
   or receive from JBF/admin, and place here (or commit them here so
   validators get them via `git pull` — see the root README's
   ["Updating config via git"](../README.md#updating-config-via-git)).
-- `cl/phases/<phase>/config.yaml` — same, but for a specific Tokyo Hard
-  Fork phase (guide Step 4). Used by `jocv update-config <phase>`.
+  A new Tokyo Hard Fork phase (guide Step 4) works the same way: your team
+  overwrites this same `config.yaml` in place with the new phase's
+  content and commits it — there is no separate per-phase file/directory.
+  `beacon`/`validator` have this directory bind-mounted directly as
+  `--testnet-dir`, so a `git pull` + `jocv restart` is enough to pick it
+  up, no copy step needed.
 - `cl/genesis.ssz` — optional precomputed consensus genesis state. Not
   referenced by any explicit flag: Lighthouse's `--testnet-dir` auto-loads
   `genesis.ssz` from that directory if present, and since

@@ -96,7 +96,7 @@ much smaller — no OS provisioning, no `.env` schema migration engine, and
 | `up` | `jocv up` | Same idea: `docker compose up -d`, respecting `COMPOSE_FILE`. |
 | `down` / `stop` | `jocv down` | Same idea, with a guide-specific reminder not to stop while awaiting activation (Step 3-2). |
 | `logs` | `jocv logs [service]` | Same idea: `docker compose logs -f`. Asks which service if more than one is active. |
-| `update` (`git pull`, `.env` migration, image rebuild, restart, all in one) | `jocv upgrade` | Only does the `git pull` part, and only if the working tree is clean and the pull is a fast-forward. Never migrates `.env`, never restarts anything, never applies a new config by itself — it just tells you what changed and which command to run next. Named `upgrade` rather than `update` specifically so it can't be confused with `jocv network apply <phase>`, which updates the network's consensus config, not this CLI's code. |
+| `update` (`git pull`, `.env` migration, image rebuild, restart, all in one) | `jocv upgrade` | Only does the `git pull` part, and only if the working tree is clean and the pull is a fast-forward. Never migrates `.env`, never restarts anything, never applies a new config by itself — it just tells you what changed and which command to run next (e.g. `jocv restart` after a `config.yaml` update). |
 
 ## Prerequisites
 
@@ -351,64 +351,60 @@ minutes after the first 5-10 minutes is a sign something's wrong). The
 `execution`/`beacon` checks are this project's own addition — the guide
 doesn't cover self-hosting them.
 
-### `jocv network apply <phase>`
+### `jocv restart [service]`
 
-For guide Step 4 (applying a new Tokyo Hard Fork phase), against
-`networks/<NETWORK>/cl/`. Looks for a config in this order:
+`docker compose restart` for whichever service(s) the current `ROLE`
+runs, or just one if named (`validator`/`execution`/`beacon`). This is
+how you apply a new hard fork phase's `config.yaml` (guide Step 4-1's
+"sudo docker restart validator") — since `beacon`/`validator` have
+`networks/<NETWORK>/cl/` bind-mounted directly as `--testnet-dir`,
+restarting the container is enough for it to pick up a `config.yaml` that
+changed on disk, no copy/rebuild step needed.
 
-1. `networks/<NETWORK>/cl/phases/<phase>/config.yaml` — a phase-specific
-   file (see [Updating config via git](#updating-config-via-git)).
-2. `networks/<NETWORK>/cl/config.yaml` — generic fallback.
-
-Backs up the previous config, copies the new one in place (the
-`beacon`/`validator` containers have `networks/<NETWORK>/cl` bind-mounted
-directly as `--testnet-dir`, so no separate copy step into `data/` is
-needed), prints its SHA-256 checksum, and — after you explicitly confirm
-both that JBF/admin announced this phase **and** that you've verified the
-config against the official source — restarts whichever containers read
-it (`validator` for `ROLE=validator`, `beacon` for `ROLE=el-cl`, both for
-`ROLE=all`).
-
-**Only run this after an official announcement from JBF/admin.** It never
-runs `git pull` or downloads anything by itself.
+**Does not recreate containers** — it will not pick up a changed compose
+file or `.env` value (image, `command:`, `environment:`); that needs
+`jocv up` instead. See [Updating config via git](#updating-config-via-git)
+for the full hard-fork-phase flow.
 
 ### Updating config via git
 
 If your team commits the official `config.yaml` into this repo (instead
 of every validator server downloading it manually each time from the JOC
-page), the update flow for a new hard fork phase becomes:
+page), the update flow for a new hard fork phase is exactly the same as
+any other CLI update:
 
-1. **Team/maintainer:** get the official config for the new phase, commit
-   it at `networks/<NETWORK>/cl/phases/<phase>/config.yaml`, push (and
-   tag, if you want an easy `git checkout` target per phase).
+1. **Team/maintainer:** get the official config for the new phase from
+   JBF/admin, verify it, overwrite `networks/<NETWORK>/cl/config.yaml` in
+   place with it, commit, push.
 2. **On each node:**
    ```bash
-   git pull
-   ./jocv network apply <phase>
+   git pull        # or: ./jocv upgrade
+   ./jocv restart
    ```
-`jocv` will find the file your team committed, show its checksum, and
-still requires you to confirm it's correct before applying — see
-[networks/README.md](networks/README.md) for the full rationale
-(`config.yaml` controls consensus rules, so this step is deliberately
-never fully automated).
+`jocv upgrade` will show you the incoming commits (including that
+`config.yaml` changed) before pulling, so you still see what's about to
+land before it does — but applying it is a deliberate, separate `jocv
+restart` afterward, not automatic. There's no per-phase file or directory
+anymore, no checksum ceremony baked into a command: this is a normal
+git-reviewed change like any other file in this repo, verified the same
+way your team verifies any other commit before merging/pushing it.
 
 ### `jocv upgrade`
 
 Updates this CLI checkout itself via `git pull` — the code, and any
-`networks/` files your team commits (see above). Named `upgrade` rather
-than `update` specifically so it can't be confused with `jocv network
-apply <phase>` above — one updates this CLI's own code, the other updates
-the network's consensus config; they used to be confusingly-similarly
-named `update`/`update-config`. Refuses to run if:
+`networks/` files your team commits (see above), including a
+hard-fork-phase `config.yaml` update. Named `upgrade` rather than
+`update` to avoid this project's old, confusingly similar
+`update`/`update-config` pair. Refuses to run if:
 - this directory isn't a git checkout,
 - the working tree has uncommitted changes, or
 - the pull wouldn't be a fast-forward (i.e. your local branch diverged).
 
 Shows the incoming commits and asks for confirmation before pulling.
 Afterward it tells you — but does not act on — whether any root-level
-`*.yml` compose file, `networks/*/cl/phases/**`, or `networks/*/el/**`
-changed, so you follow up deliberately with `jocv up` /
-`jocv network apply <phase>` / a fresh `jocv init` respectively.
+`*.yml` compose file, `networks/*/cl/config.yaml`, or `networks/*/el/**`
+changed, so you follow up deliberately with `jocv up` / `jocv restart` /
+a fresh `jocv init` respectively.
 
 ### `jocv up` / `jocv down` / `jocv logs [service]`
 
@@ -416,7 +412,9 @@ Thin wrappers around `docker compose up -d` / `down` / `logs -f`, scoped
 to whichever service(s) `ROLE` activates. `down` reminds you not to stop
 while awaiting activation (Step 3-2) if a validator is running. `logs`
 asks you to name a service if more than one is active
-(`execution`/`beacon`/`validator`).
+(`execution`/`beacon`/`validator`). See [`jocv restart`](#jocv-restart-service)
+above for the difference between `up` (recreates containers, picks up
+compose/`.env` changes) and a plain restart (doesn't).
 
 ### `jocv reset [--data]`
 
@@ -618,12 +616,17 @@ inferred/adapted or added — flagging it explicitly so you can double-check:
   password must be >12 characters but not a method; `openssl rand` is a
   standard way to satisfy that. The JWT secret isn't mentioned in the
   guide at all (only relevant to the undocumented `el-cl`/`all` roles).
-- **Git-backed config distribution** (`networks/*/cl/phases/<phase>/`,
-  `git pull` workflow, checksum + confirm before applying). Entirely
-  outside the guide, which only describes manual downloads. Deliberately
-  still requires an explicit human "verify against the official source"
-  confirmation before `jocv network apply` applies anything, and `jocv`
-  never runs `git pull` or fetches configs over the network on its own.
+- **Git-backed config distribution** — a hard fork's new `config.yaml`
+  travels the same way as any other file in this repo: your team commits
+  it, `jocv upgrade` pulls it (showing the incoming commits first), you
+  `jocv restart` to apply. Entirely outside the guide, which only
+  describes manual downloads. `jocv` still never runs `git pull` or
+  fetches configs over the network on its own — pulling and applying are
+  both explicit, separate, human-run steps. There used to be a dedicated
+  `jocv network apply <phase>` command with its own checksum/confirm
+  ceremony and a per-phase `networks/*/cl/phases/<phase>/` file — removed
+  in favor of this simpler flow, matching how eth-docker-style projects
+  normally handle config updates (git review, not an in-CLI ceremony).
 - **`jocv install`.** The guide only says "ensure Docker is set up" and
   links Docker's own install guide — it doesn't specify a method. This
   command follows Docker's official documented steps (apt repo for
@@ -650,6 +653,16 @@ inferred/adapted or added — flagging it explicitly so you can double-check:
   `jocv update` → `jocv upgrade`, since the old `update`/`update-config`
   pair read as two variants of the same command when they do unrelated
   things (this CLI's own code vs. the network's consensus config).
+- **`jocv network apply <phase>` removed entirely**, along with the
+  per-phase `networks/*/cl/phases/<phase>/config.yaml` convention. Not
+  from the guide. A hard fork's `config.yaml` now travels exactly like
+  any other file your team commits: `jocv upgrade` (git pull) + `jocv
+  restart` (new — a plain `docker compose restart`, see above). No
+  in-CLI checksum/confirm ceremony, no separate phase directory — the
+  human verification this project cares about is expected to happen
+  through normal git review before the commit lands, not through a
+  command prompt. Matches how eth-docker-style projects normally handle
+  config updates.
 
 No multi-validator support, no notifications, no client beyond
 `geth`+`lighthouse` — nothing was added beyond what was asked for.
