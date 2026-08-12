@@ -1,8 +1,9 @@
 # docker-compose.yml
 #
 # Which services run is controlled by ROLE in .env, translated by jocv into
-# COMPOSE_PROFILES (scripts/lib.sh: profiles_for_role) — docker compose
-# reads COMPOSE_PROFILES natively, no extra flags needed:
+# COMPOSE_PROFILES (jocv: profiles_for_role()) — docker compose reads
+# COMPOSE_PROFILES natively (from .env, since it sits next to this file),
+# no extra --profile flags needed:
 #   ROLE=validator -> profile "validator"             (guide Option 2 — Recommended)
 #   ROLE=el-cl     -> profile "el-cl"                 (plain node, no validator)
 #   ROLE=all       -> profiles "el-cl" and "validator" (guide Option 3)
@@ -25,7 +26,7 @@ services:
     # parse time regardless of which profile is active, so a required-var
     # error here would break `docker compose up` even for ROLE=validator,
     # which never touches this service. jocv's own preflight
-    # (scripts/lib.sh: check_el_config) is what actually enforces these
+    # (check_el_config()) is what actually enforces these
     # are set before starting this service — see networks/README.md.
     image: ${EL_CLIENT_IMAGE:-}
     container_name: execution
