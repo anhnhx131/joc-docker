@@ -245,10 +245,48 @@ cmd_install() {
         "sudo apt-get update -y" \
         "sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin"
       ;;
-    amzn | rhel | centos | fedora | rocky | almalinux)
+    amzn)
+      # Docker's official docker-ce repo does NOT work here: it's keyed off
+      # $releasever, and Amazon Linux's $releasever (e.g. "2023.12.20260803"
+      # on AL2023) doesn't match any path Docker actually publishes under
+      # download.docker.com/linux/centos/ — `dnf config-manager --add-repo`
+      # silently adds a repo that 404s on the real install step. Amazon
+      # Linux ships its own Docker Engine build instead; only the compose
+      # plugin needs a manual step (dnf has no docker-compose-plugin package
+      # here), so pull the same plugin binary Docker publishes on GitHub
+      # straight into a system-wide CLI plugin directory Docker already
+      # searches (works for every user, not just the one running this).
+      case "${VERSION_ID:-}" in
+        2)
+          warn "Detected $PRETTY_NAME (Amazon Linux 2). Using amazon-linux-extras"
+          warn "for Docker Engine — this path is best-effort, not as thoroughly"
+          warn "verified as the Ubuntu/Debian path."
+          _install_run_steps \
+            "sudo amazon-linux-extras install docker -y" \
+            "sudo systemctl enable --now docker" \
+            "sudo mkdir -p /usr/libexec/docker/cli-plugins" \
+            "sudo curl -fsSL \"https://github.com/docker/compose/releases/latest/download/docker-compose-linux-\$(uname -m)\" -o /usr/libexec/docker/cli-plugins/docker-compose" \
+            "sudo chmod +x /usr/libexec/docker/cli-plugins/docker-compose"
+          ;;
+        *)
+          warn "Detected $PRETTY_NAME. Installing Docker Engine from Amazon"
+          warn "Linux's own repo (not Docker's docker-ce repo, which doesn't"
+          warn "support Amazon Linux) plus the compose plugin from Docker's"
+          warn "GitHub releases. Best-effort, not as thoroughly verified as"
+          warn "the Ubuntu/Debian path."
+          _install_run_steps \
+            "sudo dnf -y install docker" \
+            "sudo systemctl enable --now docker" \
+            "sudo mkdir -p /usr/libexec/docker/cli-plugins" \
+            "sudo curl -fsSL \"https://github.com/docker/compose/releases/latest/download/docker-compose-linux-\$(uname -m)\" -o /usr/libexec/docker/cli-plugins/docker-compose" \
+            "sudo chmod +x /usr/libexec/docker/cli-plugins/docker-compose"
+          ;;
+      esac
+      ;;
+    rhel | centos | fedora | rocky | almalinux)
       warn "Detected $PRETTY_NAME. Docker's official repos target upstream"
-      warn "RHEL/CentOS/Fedora — this path is best-effort on Amazon Linux and"
-      warn "similar distros, not as thoroughly verified as the Ubuntu/Debian path."
+      warn "RHEL/CentOS/Fedora — this path is best-effort, not as thoroughly"
+      warn "verified as the Ubuntu/Debian path."
       _install_run_steps \
         "sudo dnf -y install dnf-plugins-core" \
         "sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo" \

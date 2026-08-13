@@ -188,7 +188,7 @@ exactly one client:
 
 | `ethd` | `jocd` equivalent | Why it's smaller here |
 | --- | --- | --- |
-| `install` (installs Docker, OS packages, tunes the OS, adds user to `docker` group) | `jocd install` | Installs Docker Engine + compose plugin only (official apt repo on Ubuntu/Debian, best-effort dnf repo elsewhere), and adds your user to the `docker` group. Deliberately does **not** tune the OS (swappiness, noatime, chrony/NTP) or install unrelated packages — a tool that's about to handle your mnemonic shouldn't also be doing broad root-level OS provisioning. Shows every `sudo` command before running it and asks for confirmation once. Idempotent: no-ops if Docker is already installed and working. |
+| `install` (installs Docker, OS packages, tunes the OS, adds user to `docker` group) | `jocd install` | Installs Docker Engine + compose plugin only, and adds your user to the `docker` group. Handles Ubuntu/Debian (official apt repo), RHEL-family (Docker's dnf repo, best-effort), and Amazon Linux specifically (its own Docker package + compose plugin from GitHub, since Docker's dnf repo doesn't work there at all — see [`jocd install`](#jocd-install) below) — `ethd` only supports Ubuntu/Debian and hard-errors on everything else. Deliberately does **not** tune the OS (swappiness, noatime, chrony/NTP) or install unrelated packages — a tool that's about to handle your mnemonic shouldn't also be doing broad root-level OS provisioning. Shows every `sudo` command before running it and asks for confirmation once. Idempotent: no-ops if Docker is already installed and working. |
 | One `.yml` file per client, merged via `COMPOSE_FILE` | Same idea — just one file, `lighthouse-vc-only.yml`, right now | eth-docker has ~5 EL × ~6 CL × addons; `jocd` has exactly the one file `SUPPORTED_CL_CLIENTS` needs today. |
 | `config` (interactive `.env` wizard + schema migration across versions) | `jocd init` prompts (network) + `jocd validator config` | A handful of variables, not dozens — no schema to migrate. |
 | `up` | `jocd up` | Same idea: `docker compose up -d`, respecting `COMPOSE_FILE`. |
@@ -203,12 +203,28 @@ text — this section is the "why", not a repeat of that.
 
 ### `jocd install`
 
-Official apt repo steps on Ubuntu/Debian; best-effort dnf repo steps on
-Amazon Linux/RHEL-family. Shows every `sudo` command up front and asks
-for confirmation once before running any of them — see [Compared to
-eth-docker's `ethd`](#compared-to-eth-dockers-ethd). Does not touch
-anything under `validator_keys/`, doesn't tune the OS, doesn't install
-anything beyond Docker itself.
+Official apt repo steps on Ubuntu/Debian. On RHEL/CentOS/Fedora/Rocky/
+AlmaLinux, Docker's own `docker-ce` dnf repo (best-effort). On Amazon
+Linux specifically, a different path: Docker's `docker-ce` repo doesn't
+work there at all — it's keyed off `$releasever`, and Amazon Linux's
+`$releasever` (e.g. `2023.12.20260803` on AL2023) doesn't match any path
+Docker actually publishes, so `dnf config-manager --add-repo` silently
+adds a repo that 404s on the real install step (confirmed: this broke in
+practice on a real AL2023 EC2 instance). Amazon Linux ships its own
+Docker Engine build instead (`dnf install docker`, or
+`amazon-linux-extras install docker` on the older Amazon Linux 2), but
+neither has a `docker-compose-plugin` package, so the compose v2 plugin
+binary is pulled directly from Docker's GitHub releases into
+`/usr/libexec/docker/cli-plugins/docker-compose` — one of the system-wide
+plugin directories the Docker CLI already searches, so it works for
+every user, not just whoever ran `jocd install`.
+
+Shows every `sudo` command up front and asks for confirmation once
+before running any of them — see [Compared to eth-docker's
+`ethd`](#compared-to-eth-dockers-ethd) (which, unlike `jocd install`,
+doesn't attempt Amazon Linux/RHEL support at all — Ubuntu/Debian only,
+hard error otherwise). Does not touch anything under `validator_keys/`,
+doesn't tune the OS, doesn't install anything beyond Docker itself.
 
 ### `jocd init`
 
@@ -553,10 +569,22 @@ double-checking against the guide:
 - **`jocd install`.** The guide only says "ensure Docker is set up" and
   links Docker's own install guide — it doesn't specify a method. This
   command follows Docker's official documented steps (apt repo for
-  Ubuntu/Debian; best-effort dnf repo elsewhere) rather than the
-  `curl | sh` convenience script, so every command is visible and
-  confirmed before running. Scoped to Docker only — no OS tuning, no
-  unrelated packages, unlike `ethd install`.
+  Ubuntu/Debian; dnf repo for RHEL-family) rather than the `curl | sh`
+  convenience script, so every command is visible and confirmed before
+  running. Scoped to Docker only — no OS tuning, no unrelated packages,
+  unlike `ethd install`.
+- **Amazon Linux-specific Docker install path**, separate from the
+  RHEL-family one. Found via a real failure on an actual AL2023 EC2
+  instance: Docker's `docker-ce` dnf repo add succeeds but every install
+  after it 404s, because the repo URL is keyed off `$releasever` and
+  Amazon Linux's `$releasever` string doesn't match any path Docker
+  publishes. Not something `ethd` has to deal with — it doesn't support
+  Amazon Linux/RHEL at all, Ubuntu/Debian only. Fixed by installing
+  Amazon Linux's own `docker` package (or `amazon-linux-extras install
+  docker` on Amazon Linux 2) and pulling the compose v2 plugin binary
+  from Docker's GitHub releases into a system-wide CLI plugin directory,
+  since neither Amazon Linux path ships a `docker-compose-plugin`
+  package.
 - **Single-file `jocd`** instead of `scripts/*.sh` + `lib.sh`. Purely
   organizational — same logic, same verbatim-block markers, just one file
   with one `cmd_<name>()` function per subcommand instead of one process
