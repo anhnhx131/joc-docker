@@ -226,6 +226,17 @@ doesn't attempt Amazon Linux/RHEL support at all — Ubuntu/Debian only,
 hard error otherwise). Does not touch anything under `validator_keys/`,
 doesn't tune the OS, doesn't install anything beyond Docker itself.
 
+`usermod -aG docker "$USER"` only takes effect in a *new* login
+session/shell — a real, reproduced gotcha: running `jocd init` (or
+anything else) in the same shell right after `jocd install` fails
+`check_docker` even though the daemon is up, because that shell's group
+membership is stale. `jocd install` warns about this at the end
+("log out and back in, or run: `newgrp docker`"), and `check_docker`
+itself (`docker info` fails but `sudo -n docker info` succeeds)
+distinguishes this from an actually-stopped daemon and points at
+`newgrp docker` specifically, rather than a generic "start Docker"
+message that sends you looking in the wrong place.
+
 ### `jocd init`
 
 Prompts for `NETWORK` (or reads it from the environment / existing
@@ -585,6 +596,16 @@ double-checking against the guide:
   from Docker's GitHub releases into a system-wide CLI plugin directory,
   since neither Amazon Linux path ships a `docker-compose-plugin`
   package.
+- **`check_docker()` distinguishes "daemon not running" from "daemon
+  running but this shell's `docker` group membership is stale"** (via
+  `sudo -n docker info` as a side-channel check) instead of one generic
+  error for both. Not from the guide. Found via a real repro right after
+  the Amazon Linux install fix above: `jocd install` runs `usermod -aG
+  docker`, which only takes effect in a *new* shell/login session, so
+  running `jocd init` immediately afterward in the same shell failed
+  `check_docker` with a message that pointed at "start Docker" — wrong
+  fix, since the daemon was already up. Now points at `newgrp docker`
+  (or re-login) specifically when that's the actual cause.
 - **Single-file `jocd`** instead of `scripts/*.sh` + `lib.sh`. Purely
   organizational — same logic, same verbatim-block markers, just one file
   with one `cmd_<name>()` function per subcommand instead of one process

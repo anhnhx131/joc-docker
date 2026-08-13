@@ -92,9 +92,19 @@ confirm_strict() {
 # --- preflight checks ---------------------------------------------------------
 check_docker() {
   command -v docker >/dev/null 2>&1 \
-    || die "Docker is not installed. See https://docs.docker.com/engine/install/"
-  docker info >/dev/null 2>&1 \
-    || die "Docker daemon is not running (or not accessible). Start Docker and re-run."
+    || die "Docker is not installed. Run: ./jocd install"
+
+  if ! docker info >/dev/null 2>&1; then
+    # Common case right after 'jocd install': the daemon is up, but this
+    # shell's group membership hasn't caught up yet (usermod -aG docker only
+    # takes effect in a NEW login session). Tell the difference so the
+    # message points at the right fix instead of a generic "start Docker".
+    if sudo -n docker info >/dev/null 2>&1; then
+      die "Docker is running, but this shell isn't in the 'docker' group yet. Run: newgrp docker   (or log out and back in), then re-run this command."
+    fi
+    die "Docker daemon is not running (or not accessible). Start it with: sudo systemctl start docker"
+  fi
+
   docker compose version >/dev/null 2>&1 \
     || die "'docker compose' (v2 plugin) is not available. Install/upgrade Docker."
   success "Docker is installed and running."
