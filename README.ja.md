@@ -25,7 +25,7 @@ English: [README.md](README.md)
 ## クイックスタート（Validator Client のみ）
 
 ```bash
-git clone git@github.com:anhnhx131/joc-docker.git
+git clone https://github.com/anhnhx131/joc-docker.git
 cd joc-docker
 ./jocd install       # Docker が未インストールならインストール
 ./jocd init

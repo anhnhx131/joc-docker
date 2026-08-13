@@ -26,7 +26,7 @@ guide-verbatim vs. inferred.
 ## Quick start (Validator Client only)
 
 ```bash
-git clone git@github.com:anhnhx131/joc-docker.git
+git clone https://github.com/anhnhx131/joc-docker.git
 cd joc-docker
 ./jocd install       # installs Docker if missing
 ./jocd init
