@@ -404,12 +404,19 @@ Updates this CLI checkout itself via `git pull` — the code, and any
 `networks/` files your team commits, including a hard-fork-phase
 `config.yaml` update. Named `upgrade` rather than `update` to avoid this
 project's old, confusingly similar `update`/`update-config` pair.
-Refuses to run if: this directory isn't a git checkout; the working tree
-has uncommitted changes; or the pull wouldn't be a fast-forward. Shows
-the incoming commits and asks for confirmation before pulling.
-Afterward it tells you — but does not act on — whether any root-level
-`*.yml` compose file or `networks/*/cl/config.yaml` changed, so you follow
-up deliberately with `jocd up` / `jocd restart` / a fresh `jocd init`
+Refuses to run if: this directory isn't a git checkout; or the pull
+wouldn't be a fast-forward. Only asks for confirmation when there's
+something to lose — a dirty working tree (uncommitted local changes) gets
+a warning + explicit yes/no before continuing (`git pull --ff-only` still
+aborts safely on its own if the incoming changes conflict with them); a
+clean tree just shows the incoming commits and pulls straight through,
+since a fast-forward pull on a clean tree is always safe/reversible on
+its own (`git reset --hard` undoes it) and the actual risky step —
+applying a pulled-in compose/config change — is a separate, still-manual
+follow-up below, not something this command does for you. Afterward it
+tells you — but does not act on — whether any root-level `*.yml` compose
+file or `networks/*/cl/config.yaml` changed, so you follow up
+deliberately with `jocd up` / `jocd restart` / a fresh `jocd init`
 respectively.
 
 ### `jocd up` / `jocd down` / `jocd logs`
@@ -577,6 +584,17 @@ double-checking against the guide:
   ceremony and a per-phase `networks/*/cl/phases/<phase>/` file — removed
   in favor of this simpler flow, matching how eth-docker-style projects
   normally handle config updates (git review, not an in-CLI ceremony).
+- **`jocd upgrade` only confirms when the tree is dirty; a clean tree
+  pulls straight through** (no more "Pull these changes now? [y/N]" every
+  time), and the incoming-commits listing now uses `git --no-pager log`.
+  Not from the guide — a UX fix on real usage: the old unconditional
+  confirm plus `git log` unexpectedly invoking a pager (it decides based
+  on the underlying fd, which is still a terminal even when stdout is
+  redirected to `&2`) combined into what looked like several confirmation
+  steps for a routine, always-safe-to-undo (`git reset --hard`)
+  fast-forward pull. A dirty tree still gets a warning + explicit yes/no,
+  since `git pull --ff-only` can fail partway if the incoming changes
+  touch the same files.
 - **`jocd install`.** The guide only says "ensure Docker is set up" and
   links Docker's own install guide — it doesn't specify a method. This
   command follows Docker's official documented steps (apt repo for
@@ -596,16 +614,28 @@ double-checking against the guide:
   from Docker's GitHub releases into a system-wide CLI plugin directory,
   since neither Amazon Linux path ships a `docker-compose-plugin`
   package.
-- **`check_docker()` distinguishes "daemon not running" from "daemon
-  running but this shell's `docker` group membership is stale"** (via
-  `sudo -n docker info` as a side-channel check) instead of one generic
-  error for both. Not from the guide. Found via a real repro right after
-  the Amazon Linux install fix above: `jocd install` runs `usermod -aG
-  docker`, which only takes effect in a *new* shell/login session, so
-  running `jocd init` immediately afterward in the same shell failed
-  `check_docker` with a message that pointed at "start Docker" — wrong
-  fix, since the daemon was already up. Now points at `newgrp docker`
-  (or re-login) specifically when that's the actual cause.
+- **A `docker()` shell function shadows every plain `docker`/`docker
+  compose` call in this file**, falling back to `sudo -E docker` for the
+  rest of that one invocation when `check_docker()` detects the daemon is
+  up but this shell's `docker` group membership hasn't kicked in yet
+  (`usermod -aG docker` only takes effect in a *new* login session/shell —
+  not something a running `jocd` process can retroactively fix for its own
+  parent shell). Not from the guide. Found via a real repro right after
+  the Amazon Linux install fix above: `jocd install` adds the user to the
+  `docker` group, then running `jocd init` immediately afterward *in that
+  same shell* failed. The first fix (a `check_docker()` message pointing
+  at `newgrp docker`) still made the operator run something outside
+  `jocd` itself before `jocd` was usable again — replaced with this
+  transparent fallback so `jocd` (not necessarily the operator's own raw
+  `docker` commands) just works either way, with only a printed warning,
+  no required action. `-E` preserves the calling shell's environment
+  because `cmd_init`'s `WITHDRAWAL_ADDRESS` export (see its comment) is
+  read by `docker compose` from the environment, not from `.env` —
+  plain `sudo` resets the environment and would silently break that.
+  `type -P docker` (not `command -v`) is used for the installed-or-not
+  check specifically because it skips shell functions/aliases and looks
+  at `$PATH` only, so it isn't fooled by the `docker()` function now
+  existing.
 - **Single-file `jocd`** instead of `scripts/*.sh` + `lib.sh`. Purely
   organizational — same logic, same verbatim-block markers, just one file
   with one `cmd_<name>()` function per subcommand instead of one process

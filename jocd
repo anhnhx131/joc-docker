@@ -89,20 +89,42 @@ confirm_strict() {
   [[ "$answer" == "$phrase" ]]
 }
 
+# --- docker wrapper ------------------------------------------------------------
+# Every function below calls plain `docker ...` / `docker compose ...`. This
+# shadows that name so a stale 'docker' group membership (the common case
+# right after 'jocd install' — usermod -aG docker only takes effect in a NEW
+# login session, see check_docker below) is absorbed transparently in one
+# place, instead of making the operator run a separate 'newgrp docker'/
+# re-login themselves before jocd is usable again. `-E` preserves the calling
+# shell's environment (needed for WITHDRAWAL_ADDRESS in cmd_init — see its
+# comment); docker-group access is already root-equivalent, so falling back
+# to sudo here isn't crossing a new privilege boundary.
+DOCKER_NEEDS_SUDO=""
+docker() {
+  if [[ -n "$DOCKER_NEEDS_SUDO" ]]; then
+    sudo -E docker "$@"
+  else
+    command docker "$@"
+  fi
+}
+
 # --- preflight checks ---------------------------------------------------------
 check_docker() {
-  command -v docker >/dev/null 2>&1 \
+  type -P docker >/dev/null 2>&1 \
     || die "Docker is not installed. Run: ./jocd install"
 
-  if ! docker info >/dev/null 2>&1; then
+  if ! command docker info >/dev/null 2>&1; then
     # Common case right after 'jocd install': the daemon is up, but this
-    # shell's group membership hasn't caught up yet (usermod -aG docker only
-    # takes effect in a NEW login session). Tell the difference so the
-    # message points at the right fix instead of a generic "start Docker".
+    # shell's group membership hasn't caught up yet. Fall back to sudo for
+    # docker commands for the rest of this invocation instead of dying —
+    # see the docker() wrapper above.
     if sudo -n docker info >/dev/null 2>&1; then
-      die "Docker is running, but this shell isn't in the 'docker' group yet. Run: newgrp docker   (or log out and back in), then re-run this command."
+      warn "This shell's 'docker' group membership hasn't kicked in yet (usually right after 'jocd install') — using sudo for docker commands this run."
+      warn "Log out and back in (or run: newgrp docker) to drop the need for sudo next time."
+      DOCKER_NEEDS_SUDO=1
+    else
+      die "Docker daemon is not running (or not accessible). Start it with: sudo systemctl start docker"
     fi
-    die "Docker daemon is not running (or not accessible). Start it with: sudo systemctl start docker"
   fi
 
   docker compose version >/dev/null 2>&1 \
@@ -318,8 +340,10 @@ cmd_install() {
   if ! groups "$USER" | grep -qw docker; then
     info "Adding $USER to the 'docker' group (to run docker without sudo)..."
     sudo usermod -aG docker "$USER"
-    warn "Group membership only takes effect in a NEW login session."
-    warn "Log out and back in (or run: newgrp docker) before using 'jocd'."
+    warn "Group membership only takes effect in a NEW login session — 'jocd'"
+    warn "itself falls back to sudo automatically in the meantime, but plain"
+    warn "'docker' commands you type yourself won't work until you log out"
+    warn "and back in (or run: newgrp docker)."
   else
     info "$USER is already in the 'docker' group."
   fi
@@ -454,7 +478,9 @@ EOF
   # shell's environment / .env, never from a `run -e` flag (that only
   # overrides the container's runtime env, applied after parsing
   # succeeds). So this must be a real exported var named exactly
-  # WITHDRAWAL_ADDRESS, not just passed via -e below.
+  # WITHDRAWAL_ADDRESS, not just passed via -e below. (Also why the
+  # docker() wrapper's sudo fallback above uses `sudo -E` — plain `sudo`
+  # would drop this before docker compose ever sees it.)
   export WITHDRAWAL_ADDRESS="$VALIDATOR_WITHDRAWAL_ADDRESS"
 
   # All three networks (mainnet/testnet/sandbox) share the same
@@ -675,10 +701,16 @@ cmd_upgrade() {
 
   cd "$JOCD_ROOT"
 
+  # Only ask when there's something to lose. A clean tree pulls straight
+  # through below (git pull --ff-only is always safe/reversible on its
+  # own); dirty local changes get an explicit yes/no, since 'git pull
+  # --ff-only' can still fail partway if the incoming changes touch the
+  # same files — better to ask upfront than let git sort it out silently.
   if [[ -n "$(git status --porcelain)" ]]; then
     warn "This checkout has local changes (git status is not clean):"
     git status --short >&2
-    die "Commit, stash, or discard local changes before running 'jocd upgrade'."
+    confirm "Continue anyway? ('git pull --ff-only' will abort safely if this conflicts)" \
+      || die "Aborted. Commit, stash, or discard local changes first, then re-run 'jocd upgrade'."
   fi
 
   local branch
@@ -695,11 +727,13 @@ cmd_upgrade() {
     return 0
   fi
 
+  # --no-pager: without it, git still invokes a pager here even though
+  # stdout is redirected to &2 (it decides based on the underlying fd,
+  # which is still the terminal) — that turned an informational listing
+  # into an unexpected "Press RETURN to continue" prompt.
   info "$behind_count new commit(s) available on '$branch':"
-  git log --oneline "HEAD..origin/$branch" >&2
+  git --no-pager log --oneline "HEAD..origin/$branch" >&2
   echo >&2
-
-  confirm "Pull these changes now?" || die "Aborted. Nothing was changed."
 
   # Look ahead at what's changing under paths that affect a running
   # node, so we can tell you what to do next instead of acting on it.
