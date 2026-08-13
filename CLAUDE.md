@@ -374,7 +374,11 @@ validator") — since `validator` has `networks/<NETWORK>/cl/` bind-mounted
 directly as `--testnet-dir`, restarting the container is enough for it to
 pick up a `config.yaml` that changed on disk, no copy/rebuild step
 needed. **Does not recreate the container** — a changed compose file or
-`.env` value needs `jocd up` instead. See [Updating config via
+`.env` value needs `jocd up` instead; the command prints a warning to
+this effect every time it runs (a real point of confusion in practice —
+an operator ran `jocd validator config beacon ...` then `jocd restart`
+expecting the new `BEACON_URL` to take effect, and it silently didn't,
+since restart doesn't recreate). See [Updating config via
 git](#updating-config-via-git) for the full hard-fork-phase flow.
 
 ### Updating config via git

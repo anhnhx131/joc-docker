@@ -802,6 +802,12 @@ cmd_restart() {
   [[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found. Run 'jocd init' first."
   load_env
 
+  warn "'jocd restart' does NOT recreate the container — it won't pick up"
+  warn "'.env' changes (e.g. 'jocd validator config beacon/address', a new"
+  warn "COMPOSE_FILE). It only re-reads bind-mounted files already on disk,"
+  warn "like networks/<NETWORK>/cl/config.yaml. For anything else, run"
+  warn "'jocd up' instead."
+
   info "Restarting: validator..."
   ( cd "$JOCD_ROOT" && docker compose restart validator )
   success "Done. Check with: jocd status"
