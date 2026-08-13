@@ -1,6 +1,6 @@
 # CLAUDE.md — instructions for working on this repo
 
-This repo (`jocv`) is a bash-only CLI that packages the machine-side setup
+This repo (`jocd`) is a bash-only CLI that packages the machine-side setup
 steps a JOC (Japan Open Chain) PoSA validator operator must perform, based
 on the official "JOC Tokyo Hard Fork Validator Step-by-Step Guide".
 `README.md`/`README.ja.md` are the short, human-facing quickstart —
@@ -46,18 +46,18 @@ if/when that gets properly rebuilt.
   step that shows a secret once or deletes key material irreversibly,
   `chmod 600` on every key/secret file. See [Security model](#security-model).
 - **Two surfaces, deliberately separate — don't merge them back together:**
-  - `jocv` — day-2 lifecycle CLI (install/init/validator/up/down/restart/
+  - `jocd` — day-2 lifecycle CLI (install/init/validator/up/down/restart/
     logs/upgrade/destroy). Single file on purpose (bash `source` doesn't
     give real scoping anyway, see its header comment) — same pattern as
     eth-docker's `ethd`.
   - `staking-deposit-cli.yml` + `staking-deposit-cli/*.sh` — standalone
     key-ceremony helper (`deposit-generate`, `validator-import`; guide
     Step 2-2/2-6), run via `docker compose -f staking-deposit-cli.yml run --rm
-    <service>`. Kept out of `jocv` because it's the most
+    <service>`. Kept out of `jocd` because it's the most
     security-sensitive, most likely-to-independently-change part of the
     project (image version, extra flags, a future non-Lighthouse import
-    command). `jocv init` calls it; it also runs standalone. No `docker
-    run`/`docker` command of any kind lives in `jocv` for this — `jocv`
+    command). `jocd init` calls it; it also runs standalone. No `docker
+    run`/`docker` command of any kind lives in `jocd` for this — `jocd`
     only invokes `docker compose run` and never touches the mnemonic.
     Neither service ever submits anything to any network (both also run
     with `network_mode: none`); `deposit-generate` prints the deposit data
@@ -73,7 +73,7 @@ if/when that gets properly rebuilt.
     script) is borrowed from eth-docker here, not the mechanism. See
     [Checked against eth-docker's import](#checked-against-eth-dockers-import).
 - **Compose files, one per client** — just `lighthouse-vc-only.yml` right
-  now, selected via `COMPOSE_FILE` (managed by `jocv`'s
+  now, selected via `COMPOSE_FILE` (managed by `jocd`'s
   `compose_files_for_role()`) — not one file with `profiles:`. Keep this
   as a function/allow-list-driven single source of truth rather than a
   hardcoded constant, even with one entry, so adding a client later is
@@ -88,7 +88,7 @@ if/when that gets properly rebuilt.
 - Keep the `SUPPORTED_NETWORKS`/`SUPPORTED_CL_CLIENTS`/`SUPPORTED_ROLES`
   allow-lists as the single source of truth — adding an entry is a
   deliberate, reviewed decision, not something a command should infer.
-- Idempotency matters: re-running `jocv init` must never silently overwrite
+- Idempotency matters: re-running `jocd init` must never silently overwrite
   or delete existing keys/`.env`/data. Prefer "detect + ask" over
   "detect + skip silently" or "detect + overwrite".
 - **Keep `README.md`/`README.ja.md` short.** They're the human quickstart
@@ -101,17 +101,17 @@ if/when that gets properly rebuilt.
 ## Testing safety — read this before running anything live
 
 This CLI runs `docker compose up/down/restart` and deletes local
-directories. **Do not run those live subcommands (`jocv up`, `down`,
+directories. **Do not run those live subcommands (`jocd up`, `down`,
 `restart`, `destroy`, or raw `docker compose up/down/restart`) against a
 real, already-deployed checkout** — this has caused real incidents twice
 now: once when testing in a second checkout stopped a live validator
 container (both directories shared the same basename and neither compose
 file has an explicit project `name:`, so they defaulted to the same
 Docker Compose project and the same `container_name:`-pinned containers),
-and once when `jocv restart` was run with no arguments to "just check the
+and once when `jocd restart` was run with no arguments to "just check the
 usage/dispatch," not realizing the no-argument case is the real
 restart-everything path, not a no-op or a help screen. **Before running
-any `jocv` subcommand you haven't fully read yet against a checkout that
+any `jocd` subcommand you haven't fully read yet against a checkout that
 might be live, run `docker ps` first and think about what the no-argument
 / default-path behavior actually does** — "just testing the CLI surface"
 is not a safe assumption for a command whose default behavior does
@@ -144,13 +144,13 @@ something real.
 
 ## Configuration
 
-`jocv` is built around a couple of independent choices, set once in
-`.env` (`jocv init` walks you through them):
+`jocd` is built around a couple of independent choices, set once in
+`.env` (`jocd init` walks you through them):
 
 | Setting | Values | What it controls |
 | --- | --- | --- |
 | `NETWORK` | `mainnet` \| `testnet` \| `sandbox` | Which JOC network's config/genesis to use — see `networks/<NETWORK>/cl/` and [networks/README.md](networks/README.md). |
-| `CL_CLIENT` | `lighthouse` (only option today) | Which Validator Client software runs. Structured so `prysm` etc. can be added later without changing this shape — but only `lighthouse` is implemented right now; any other value is rejected with a clear "not supported yet" error (`jocv`: `SUPPORTED_CL_CLIENTS`). |
+| `CL_CLIENT` | `lighthouse` (only option today) | Which Validator Client software runs. Structured so `prysm` etc. can be added later without changing this shape — but only `lighthouse` is implemented right now; any other value is rejected with a clear "not supported yet" error (`jocd`: `SUPPORTED_CL_CLIENTS`). |
 | `ROLE` | `validator` (only option) | Kept as a variable/allow-list (`SUPPORTED_ROLES`) rather than hardcoded, so a future `el-cl`/`all` role (see above) is additive to add back, not a rewrite. Not something you choose today. |
 
 `COMPOSE_FILE` in `.env` is set automatically (`compose_files_for_role()`)
@@ -182,26 +182,26 @@ machine.
 ## Compared to eth-docker's `ethd`
 
 If you've used [eth-docker](https://github.com/ethstaker/eth-docker)'s
-`ethd install|config|up|update`, `jocv` follows the same rough shape but
+`ethd install|config|up|update`, `jocd` follows the same rough shape but
 much smaller — no OS provisioning, no `.env` schema migration engine, and
 exactly one client:
 
-| `ethd` | `jocv` equivalent | Why it's smaller here |
+| `ethd` | `jocd` equivalent | Why it's smaller here |
 | --- | --- | --- |
-| `install` (installs Docker, OS packages, tunes the OS, adds user to `docker` group) | `jocv install` | Installs Docker Engine + compose plugin only (official apt repo on Ubuntu/Debian, best-effort dnf repo elsewhere), and adds your user to the `docker` group. Deliberately does **not** tune the OS (swappiness, noatime, chrony/NTP) or install unrelated packages — a tool that's about to handle your mnemonic shouldn't also be doing broad root-level OS provisioning. Shows every `sudo` command before running it and asks for confirmation once. Idempotent: no-ops if Docker is already installed and working. |
-| One `.yml` file per client, merged via `COMPOSE_FILE` | Same idea — just one file, `lighthouse-vc-only.yml`, right now | eth-docker has ~5 EL × ~6 CL × addons; `jocv` has exactly the one file `SUPPORTED_CL_CLIENTS` needs today. |
-| `config` (interactive `.env` wizard + schema migration across versions) | `jocv init` prompts (network) + `jocv validator config` | A handful of variables, not dozens — no schema to migrate. |
-| `up` | `jocv up` | Same idea: `docker compose up -d`, respecting `COMPOSE_FILE`. |
-| `down` / `stop` | `jocv down` | Same idea, with a guide-specific reminder not to stop while awaiting activation (Step 3-2). |
-| `logs` | `jocv logs` | Same idea: `docker compose logs -f`. |
-| `update` (`git pull`, `.env` migration, image rebuild, restart, all in one) | `jocv upgrade` | Only does the `git pull` part, and only if the working tree is clean and the pull is a fast-forward. Never migrates `.env`, never restarts anything, never applies a new config by itself — it just tells you what changed and which command to run next (e.g. `jocv restart` after a `config.yaml` update). |
+| `install` (installs Docker, OS packages, tunes the OS, adds user to `docker` group) | `jocd install` | Installs Docker Engine + compose plugin only (official apt repo on Ubuntu/Debian, best-effort dnf repo elsewhere), and adds your user to the `docker` group. Deliberately does **not** tune the OS (swappiness, noatime, chrony/NTP) or install unrelated packages — a tool that's about to handle your mnemonic shouldn't also be doing broad root-level OS provisioning. Shows every `sudo` command before running it and asks for confirmation once. Idempotent: no-ops if Docker is already installed and working. |
+| One `.yml` file per client, merged via `COMPOSE_FILE` | Same idea — just one file, `lighthouse-vc-only.yml`, right now | eth-docker has ~5 EL × ~6 CL × addons; `jocd` has exactly the one file `SUPPORTED_CL_CLIENTS` needs today. |
+| `config` (interactive `.env` wizard + schema migration across versions) | `jocd init` prompts (network) + `jocd validator config` | A handful of variables, not dozens — no schema to migrate. |
+| `up` | `jocd up` | Same idea: `docker compose up -d`, respecting `COMPOSE_FILE`. |
+| `down` / `stop` | `jocd down` | Same idea, with a guide-specific reminder not to stop while awaiting activation (Step 3-2). |
+| `logs` | `jocd logs` | Same idea: `docker compose logs -f`. |
+| `update` (`git pull`, `.env` migration, image rebuild, restart, all in one) | `jocd upgrade` | Only does the `git pull` part, and only if the working tree is clean and the pull is a fast-forward. Never migrates `.env`, never restarts anything, never applies a new config by itself — it just tells you what changed and which command to run next (e.g. `jocd restart` after a `config.yaml` update). |
 
 ## Command reference (detailed rationale)
 
-`jocv --help` (or any subcommand with no args) prints the short usage
+`jocd --help` (or any subcommand with no args) prints the short usage
 text — this section is the "why", not a repeat of that.
 
-### `jocv install`
+### `jocd install`
 
 Official apt repo steps on Ubuntu/Debian; best-effort dnf repo steps on
 Amazon Linux/RHEL-family. Shows every `sudo` command up front and asks
@@ -210,14 +210,14 @@ eth-docker's `ethd`](#compared-to-eth-dockers-ethd). Does not touch
 anything under `validator_keys/`, doesn't tune the OS, doesn't install
 anything beyond Docker itself.
 
-### `jocv init`
+### `jocd init`
 
 Prompts for `NETWORK` (or reads it from the environment / existing
 `.env`), then: checks Docker; creates `data/validator_keys/`; checks
 `networks/<NETWORK>/cl/{config.yaml,deposit_contract_block.txt}` exist
 (prints SHA-256); prompts for the withdrawal address and delegates key
 generation/import to [`staking-deposit-cli.yml`](#staking-deposit-cliyml)
-(guide Step 2-2, 2-6 — `jocv` itself never touches the mnemonic); writes
+(guide Step 2-2, 2-6 — `jocd` itself never touches the mnemonic); writes
 `.env`; runs `docker compose up -d`; prints the `deposit_data-xxx.json`
 path + confidentiality reminder.
 
@@ -249,9 +249,9 @@ result back to your user — lives in its own script under
 `gulabs/gu-ethstaker-deposit-cli` / `sigp/lighthouse` images. Neither
 image is ever rebuilt: what runs is exactly what JBF/admin published.
 
-`jocv init` calls both services for you automatically — most people
+`jocd init` calls both services for you automatically — most people
 never invoke this directly. It's kept as its own compose file +
-entrypoint scripts, deliberately outside `jocv` (see Ground rules above
+entrypoint scripts, deliberately outside `jocd` (see Ground rules above
 for the two reasons why).
 
 `deposit-generate` never submits anything to any network — it only prints
@@ -284,7 +284,7 @@ Keymanager-API mechanism.
 Both scripts default `HOST_UID`/`HOST_GID` to `0:0` (root — these
 containers have no unprivileged user to drop into, unlike eth-docker's
 rebuilt image) and `chown` the files they produce back to whatever
-`HOST_UID`/`HOST_GID` `jocv` passes in (your actual host user), so you're
+`HOST_UID`/`HOST_GID` `jocd` passes in (your actual host user), so you're
 not left with root-owned key material on native Linux hosts.
 
 #### Checked against eth-docker's import
@@ -305,7 +305,7 @@ structural pattern — a dedicated "tools"-profile compose service plus its
 own entrypoint script, instead of a raw `docker run` in a host script —
 and the chown-back-to-host-user convention described above.
 
-### `jocv validator config [<key> [<value>]]`
+### `jocd validator config [<key> [<value>]]`
 
 Single, extensible entry point for validator-scoped settings. No
 argument: prints every known key's current value. One key, no value:
@@ -319,27 +319,27 @@ Client the Validator Client connects to — BCCloud in guide Step 2-7, or a
 new endpoint for a Step 4 hard fork change).
 
 Adding a future key (e.g. graffiti) is meant to be a small, additive
-change: one more entry in `jocv`'s `VALIDATOR_CONFIG_KEYS` array plus one
+change: one more entry in `jocd`'s `VALIDATOR_CONFIG_KEYS` array plus one
 case arm each in `_validator_config_show()`/`_validator_config_set()` —
 the view-all/view-one/confirm-and-apply flow never changes, so this
 command never grows a new top-level command per setting.
 
-### `jocv validator deposit-data`
+### `jocd validator deposit-data`
 
-Reprints the `deposit_data-*.json` path and contents generated by `jocv
+Reprints the `deposit_data-*.json` path and contents generated by `jocd
 init` (guide Step 3-1) — for whenever you need it again after the
 one-time printout at init time. Public data only
 (pubkey/signature/withdrawal credentials) — never touches the mnemonic,
 keystore, or password file.
 
-### `jocv status`
+### `jocd status`
 
 Checks the `validator` container is running, prints its recent logs, and
 scans them for `Not attesting` per the guide's Step 3-2 criteria
 (persisting 15-20+ minutes after the first 5-10 minutes is a sign
 something's wrong).
 
-### `jocv restart`
+### `jocd restart`
 
 `docker compose restart validator`. This is how you apply a new hard
 fork phase's `config.yaml` (guide Step 4-1's "sudo docker restart
@@ -347,7 +347,7 @@ validator") — since `validator` has `networks/<NETWORK>/cl/` bind-mounted
 directly as `--testnet-dir`, restarting the container is enough for it to
 pick up a `config.yaml` that changed on disk, no copy/rebuild step
 needed. **Does not recreate the container** — a changed compose file or
-`.env` value needs `jocv up` instead. See [Updating config via
+`.env` value needs `jocd up` instead. See [Updating config via
 git](#updating-config-via-git) for the full hard-fork-phase flow.
 
 ### Updating config via git
@@ -362,16 +362,16 @@ any other CLI update:
    place with it, commit, push.
 2. **On each node:**
    ```bash
-   git pull        # or: ./jocv upgrade
-   ./jocv restart
+   git pull        # or: ./jocd upgrade
+   ./jocd restart
    ```
-`jocv upgrade` will show you the incoming commits (including that
+`jocd upgrade` will show you the incoming commits (including that
 `config.yaml` changed) before pulling — but applying it is a deliberate,
-separate `jocv restart` afterward, not automatic. No per-phase file or
+separate `jocd restart` afterward, not automatic. No per-phase file or
 directory, no checksum ceremony baked into a command: this is a normal
 git-reviewed change like any other file in this repo.
 
-### `jocv upgrade`
+### `jocd upgrade`
 
 Updates this CLI checkout itself via `git pull` — the code, and any
 `networks/` files your team commits, including a hard-fork-phase
@@ -382,18 +382,18 @@ has uncommitted changes; or the pull wouldn't be a fast-forward. Shows
 the incoming commits and asks for confirmation before pulling.
 Afterward it tells you — but does not act on — whether any root-level
 `*.yml` compose file or `networks/*/cl/config.yaml` changed, so you follow
-up deliberately with `jocv up` / `jocv restart` / a fresh `jocv init`
+up deliberately with `jocd up` / `jocd restart` / a fresh `jocd init`
 respectively.
 
-### `jocv up` / `jocv down` / `jocv logs`
+### `jocd up` / `jocd down` / `jocd logs`
 
 Thin wrappers around `docker compose up -d` / `down` / `logs -f` for the
 `validator` service. `down` reminds you not to stop while awaiting
-activation (Step 3-2). See `jocv restart` above for the difference
+activation (Step 3-2). See `jocd restart` above for the difference
 between `up` (recreates the container, picks up compose/`.env` changes)
 and a plain restart (doesn't).
 
-### `jocv destroy`
+### `jocd destroy`
 
 Stops this node's containers, then **permanently deletes** `data/` (keys,
 deposit data, the Validator Client's own datadir) and `.env`. Prints
@@ -402,10 +402,10 @@ decommissioned or was never submitted, then requires typing `delete`
 verbatim (a plain `y` isn't enough) before touching anything. No backup
 is made — `networks/` (public config) is untouched.
 
-Deliberately its own command rather than a `jocv down --data`/`--all`
+Deliberately its own command rather than a `jocd down --data`/`--all`
 flag — no accidentally-omitted flag can turn a routine stop into an
-irreversible wipe. For just stopping containers (reversible), use `jocv
-down` instead — this is what `jocv init` points you to when it refuses
+irreversible wipe. For just stopping containers (reversible), use `jocd
+down` instead — this is what `jocd init` points you to when it refuses
 to overwrite an existing, non-empty `data/validator_keys/`.
 
 ## Security model
@@ -414,7 +414,7 @@ to overwrite an existing, non-empty `data/validator_keys/`.
   network — it lives only in a shell variable, inside
   `staking-deposit-cli/generate-entrypoint.sh`, running inside the
   `deposit-generate` container, for the few seconds between the two
-  `ethstaker-deposit-cli` calls, and is `unset` immediately after. `jocv`
+  `ethstaker-deposit-cli` calls, and is `unset` immediately after. `jocd`
   itself never sees it — it only runs `docker compose -f
   staking-deposit-cli.yml run --rm deposit-generate`.
 - `set -x` is never used anywhere near `MNEMONIC` or `password.txt`.
@@ -447,7 +447,7 @@ to overwrite an existing, non-empty `data/validator_keys/`.
 
 Before trusting this with a real mnemonic:
 
-1. **Read the code.** The CLI proper is one file, `jocv`. Key
+1. **Read the code.** The CLI proper is one file, `jocd`. Key
    generation/import is `staking-deposit-cli.yml` plus
    `staking-deposit-cli/generate-entrypoint.sh` / `import-entrypoint.sh` —
    read those specifically. The verbatim/adapted command blocks are
@@ -501,16 +501,16 @@ double-checking against the guide:
   lives under `networks/<NETWORK>/cl` instead of `data/config`. Same
   flags/values as the guide otherwise.
 - **Key generation/import split into a standalone `staking-deposit-cli.yml`
-  compose file + `staking-deposit-cli/*.sh`**, called by `jocv init`
-  via `docker compose run` rather than inlined in `jocv` itself. Not from
+  compose file + `staking-deposit-cli/*.sh`**, called by `jocd init`
+  via `docker compose run` rather than inlined in `jocd` itself. Not from
   the guide — a deliberate architecture choice so the most
   security-sensitive, most likely-to-change part of this project (image
   version, extra flags, a future non-Lighthouse import command) never
-  requires touching `jocv`'s larger lifecycle logic, and can be
+  requires touching `jocd`'s larger lifecycle logic, and can be
   read/audited/run standalone. Originally a single bash script that ran
   `docker run` itself; restructured into a compose file + bind-mounted
   entrypoint scripts, modeled on eth-docker's
-  `deposit-cli.yml`/`docker-entrypoint.sh` convention, so `jocv` never
+  `deposit-cli.yml`/`docker-entrypoint.sh` convention, so `jocd` never
   runs a raw `docker run`/`docker` command and never touches the mnemonic
   at all — it only invokes `docker compose run`. See
   [`staking-deposit-cli.yml`](#staking-deposit-cliyml) above, including
@@ -541,55 +541,55 @@ double-checking against the guide:
   way to satisfy that.
 - **Git-backed config distribution** — a hard fork's new `config.yaml`
   travels the same way as any other file in this repo: your team commits
-  it, `jocv upgrade` pulls it (showing the incoming commits first), you
-  `jocv restart` to apply. Entirely outside the guide, which only
-  describes manual downloads. `jocv` still never runs `git pull` or
+  it, `jocd upgrade` pulls it (showing the incoming commits first), you
+  `jocd restart` to apply. Entirely outside the guide, which only
+  describes manual downloads. `jocd` still never runs `git pull` or
   fetches configs over the network on its own — pulling and applying are
   both explicit, separate, human-run steps. There used to be a dedicated
-  `jocv network apply <phase>` command with its own checksum/confirm
+  `jocd network apply <phase>` command with its own checksum/confirm
   ceremony and a per-phase `networks/*/cl/phases/<phase>/` file — removed
   in favor of this simpler flow, matching how eth-docker-style projects
   normally handle config updates (git review, not an in-CLI ceremony).
-- **`jocv install`.** The guide only says "ensure Docker is set up" and
+- **`jocd install`.** The guide only says "ensure Docker is set up" and
   links Docker's own install guide — it doesn't specify a method. This
   command follows Docker's official documented steps (apt repo for
   Ubuntu/Debian; best-effort dnf repo elsewhere) rather than the
   `curl | sh` convenience script, so every command is visible and
   confirmed before running. Scoped to Docker only — no OS tuning, no
   unrelated packages, unlike `ethd install`.
-- **Single-file `jocv`** instead of `scripts/*.sh` + `lib.sh`. Purely
+- **Single-file `jocd`** instead of `scripts/*.sh` + `lib.sh`. Purely
   organizational — same logic, same verbatim-block markers, just one file
   with one `cmd_<name>()` function per subcommand instead of one process
   per file. Not from the guide or from eth-docker's exact layout, but
   deliberately modeled on `ethd`'s single-file shape.
-- **`jocv validator config [<key> [<value>]]` + `jocv validator
-  deposit-data`**, replacing the earlier flat `jocv config` + `jocv
+- **`jocd validator config [<key> [<value>]]` + `jocd validator
+  deposit-data`**, replacing the earlier flat `jocd config` + `jocd
   beacon set <url>`. Not from the guide — a UX cleanup: those two
-  commands overlapped (both could set `BEACON_URL`), and `jocv validator
+  commands overlapped (both could set `BEACON_URL`), and `jocd validator
   deposit-data` is new (previously the deposit data was only ever printed
-  once, at `jocv init` time). `validator config` is a key/value dispatch
+  once, at `jocd init` time). `validator config` is a key/value dispatch
   (`VALIDATOR_CONFIG_KEYS` array + a case arm per key) rather than one
   subcommand per setting, specifically so a future setting doesn't need a
-  new top-level command. Also renamed `jocv update-config <phase>` →
-  `jocv network apply <phase>` and
-  `jocv update` → `jocv upgrade`, since the old `update`/`update-config`
+  new top-level command. Also renamed `jocd update-config <phase>` →
+  `jocd network apply <phase>` and
+  `jocd update` → `jocd upgrade`, since the old `update`/`update-config`
   pair read as two variants of the same command when they do unrelated
   things (this CLI's own code vs. the network's consensus config).
-- **`jocv network apply <phase>` removed entirely**, along with the
+- **`jocd network apply <phase>` removed entirely**, along with the
   per-phase `networks/*/cl/phases/<phase>/config.yaml` convention. Not
   from the guide. A hard fork's `config.yaml` now travels exactly like
-  any other file your team commits: `jocv upgrade` (git pull) + `jocv
+  any other file your team commits: `jocd upgrade` (git pull) + `jocd
   restart` (a plain `docker compose restart`). No in-CLI checksum/confirm
   ceremony, no separate phase directory — the human verification this
   project cares about is expected to happen through normal git review
   before the commit lands, not through a command prompt. Matches how
   eth-docker-style projects normally handle config updates.
-- **`jocv reset [--data]` → `jocv down` + `jocv destroy`.** Not from the
-  guide — a naming/safety cleanup. `jocv reset` (no flag) and `jocv down`
+- **`jocd reset [--data]` → `jocd down` + `jocd destroy`.** Not from the
+  guide — a naming/safety cleanup. `jocd reset` (no flag) and `jocd down`
   used to do almost the same thing (`docker compose down`, one with
-  `--remove-orphans`); folded the orphan-removal into `jocv down` and
+  `--remove-orphans`); folded the orphan-removal into `jocd down` and
   dropped that redundant no-flag case entirely. The irreversible,
-  data-wiping case is now its own command, `jocv destroy`, instead of a
+  data-wiping case is now its own command, `jocd destroy`, instead of a
   `--data` flag on `down` — so no accidentally-omitted flag can turn a
   routine stop into a permanent wipe, and the name itself signals
   "irreversible" instead of the more neutral-sounding "reset".
@@ -597,7 +597,7 @@ double-checking against the guide:
   guide's undocumented Option 3) removed entirely** — `geth.yml`,
   `lighthouse-cl-only.yml`, `networks/*/el/`, `networks/*/cl/bootnodes.txt`,
   `EL_CLIENT`/`EL_CLIENT_IMAGE`/`EL_NETWORK_ID`/bootnode-reading logic in
-  `jocv`, all deleted. This was never guide-verified (the guide explicitly
+  `jocd`, all deleted. This was never guide-verified (the guide explicitly
   says it doesn't document Option 3) and was this project's own
   best-effort Geth/Lighthouse convention — kept only as long as it stayed
   purely additive to the guide-verified `ROLE=validator` path. Removed
@@ -622,7 +622,7 @@ No multi-validator support, no notifications, no client beyond
 
 ```
 joc-docker/
-├── jocv                        # the whole CLI — one file:
+├── jocd                        # the whole CLI — one file:
 │                                #   1. paths + SUPPORTED_* allow-lists
 │                                #   2. helpers (logging, confirm(), validators,
 │                                #      env/network utilities)
@@ -633,7 +633,7 @@ joc-docker/
 ├── staking-deposit-cli.yml     # standalone key ceremony compose file (Step 2-2, 2-6)
 │                                #   deposit-generate: mnemonic + keystore + deposit data
 │                                #   validator-import: hands keystore to a local Lighthouse
-│                                # called by 'jocv init', but runnable on its own
+│                                # called by 'jocd init', but runnable on its own
 ├── staking-deposit-cli/
 │   ├── generate-entrypoint.sh  # overrides gu-ethstaker-deposit-cli's entrypoint
 │   └── import-entrypoint.sh    # overrides sigp/lighthouse's entrypoint

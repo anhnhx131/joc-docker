@@ -1,4 +1,4 @@
-# joc-docker (`jocv`)
+# joc-docker (`jocd`)
 
 日本語版: [README.ja.md](README.ja.md)
 
@@ -13,7 +13,7 @@ guide-verbatim vs. inferred.
 
 - A Linux/macOS machine you control (EC2, VPS, on-prem — anything that
   stays online).
-- [Docker](https://docs.docker.com/engine/install/) — run `jocv install`
+- [Docker](https://docs.docker.com/engine/install/) — run `jocd install`
   if you don't have it yet.
 - Guide Step 1-1 (receiver withdrawal address) and Step 1-2 (joined the
   JOC PoSA network) already done.
@@ -24,16 +24,16 @@ guide-verbatim vs. inferred.
 ```bash
 git clone git@github.com:anhnhx131/joc-docker.git
 cd joc-docker
-./jocv install       # installs Docker if missing
-./jocv init
+./jocd install       # installs Docker if missing
+./jocd init
 ```
 
 `networks/<NETWORK>/cl/` already ships the network config this repo
-maintains — if it's ever missing or out of date for your network, `jocv
+maintains — if it's ever missing or out of date for your network, `jocd
 init` tells you exactly what's missing and where to get it, so there's
 nothing to fetch by hand up front.
 
-`jocv init` prompts for your network and withdrawal address, then
+`jocd init` prompts for your network and withdrawal address, then
 generates your mnemonic/keys and starts the Validator Client. **The
 mnemonic is shown once — write it down on paper before typing `yes` to
 continue.** Never share it, the keystore, or `password.txt` with anyone.
@@ -43,26 +43,26 @@ it won't attest until you set it to your real Consensus Client endpoint
 (e.g. the BCCloud node opened in guide Step 2-5):
 
 ```bash
-./jocv validator config beacon http://<bccloud-node-ip>:3500
-./jocv status
+./jocd validator config beacon http://<bccloud-node-ip>:3500
+./jocd status
 ```
 
 Submit `data/validator_keys/deposit_data-xxx.json` to Launchpad (reprint
-it anytime with `./jocv validator deposit-data`).
+it anytime with `./jocd validator deposit-data`).
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
-| `jocv install` | Install Docker if missing |
-| `jocv init` | First-time setup: keys, deposit data, start the validator |
-| `jocv validator config [key] [value]` | View/change `address` or `beacon` |
-| `jocv validator deposit-data` | Reprint the deposit data |
-| `jocv status` | Health check |
-| `jocv up` / `down` / `logs` | Day-to-day lifecycle |
-| `jocv restart` | Apply a `config.yaml` update (hard fork) |
-| `jocv upgrade` | Update this CLI via `git pull` |
-| `jocv destroy` | Permanently wipe keys/deposit data/`.env` (irreversible) |
+| `jocd install` | Install Docker if missing |
+| `jocd init` | First-time setup: keys, deposit data, start the validator |
+| `jocd validator config [key] [value]` | View/change `address` or `beacon` |
+| `jocd validator deposit-data` | Reprint the deposit data |
+| `jocd status` | Health check |
+| `jocd up` / `down` / `logs` | Day-to-day lifecycle |
+| `jocd restart` | Apply a `config.yaml` update (hard fork) |
+| `jocd upgrade` | Update this CLI via `git pull` |
+| `jocd destroy` | Permanently wipe keys/deposit data/`.env` (irreversible) |
 
 See [CLAUDE.md](CLAUDE.md) for what each command does under the hood and
 why.

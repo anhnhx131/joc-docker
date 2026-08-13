@@ -13,7 +13,7 @@ networks/
 └── sandbox/    (same layout)
 ```
 
-`jocv` picks which of these to use based on `NETWORK` in `.env`
+`jocd` picks which of these to use based on `NETWORK` in `.env`
 (`mainnet` | `testnet` | `sandbox`).
 
 ## What goes here and from where
@@ -31,7 +31,7 @@ fork epochs) — safe to commit to git, unlike `data/` or `.env`.
   overwrites this same `config.yaml` in place with the new phase's
   content and commits it — there is no separate per-phase file/directory.
   `validator` has this directory bind-mounted directly as `--testnet-dir`,
-  so a `git pull` + `jocv restart` is enough to pick it up, no copy step
+  so a `git pull` + `jocd restart` is enough to pick it up, no copy step
   needed.
 - `cl/genesis.ssz` — optional precomputed consensus genesis state. Not
   referenced by any explicit flag: Lighthouse's `--testnet-dir` auto-loads

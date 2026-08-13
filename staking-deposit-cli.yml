@@ -22,7 +22,7 @@
 # mandatory typed 'yes' confirmation, the Step 2-6 Lighthouse import) and
 # README.md's "staking-deposit-cli.yml" section.
 #
-# Called automatically by `jocv init`, but fully standalone — copy this
+# Called automatically by `jocd init`, but fully standalone — copy this
 # file plus staking-deposit-cli/ anywhere with Docker installed and run
 #   docker compose -f staking-deposit-cli.yml run --rm deposit-generate
 # yourself, e.g. to generate keys on a separate/offline machine from the
@@ -43,7 +43,7 @@ services:
     image: gulabs/gu-ethstaker-deposit-cli:v0.0.1-gubuild.0
     network_mode: none
     environment:
-      - WITHDRAWAL_ADDRESS=${WITHDRAWAL_ADDRESS:?Set WITHDRAWAL_ADDRESS (jocv init prompts for this; standalone, export it yourself).}
+      - WITHDRAWAL_ADDRESS=${WITHDRAWAL_ADDRESS:?Set WITHDRAWAL_ADDRESS (jocd init prompts for this; standalone, export it yourself).}
       - HOST_UID=${HOST_UID:-0}
       - HOST_GID=${HOST_GID:-0}
     volumes:
@@ -61,6 +61,6 @@ services:
       - HOST_GID=${HOST_GID:-0}
     volumes:
       - ./data:/data
-      - ./networks/${NETWORK:?Set NETWORK (jocv init exports this; standalone, export it yourself).}/cl:/data/config:ro
+      - ./networks/${NETWORK:?Set NETWORK (jocd init exports this; standalone, export it yourself).}/cl:/data/config:ro
       - ./staking-deposit-cli:/entrypoint:ro
     entrypoint: ["/entrypoint/import-entrypoint.sh"]

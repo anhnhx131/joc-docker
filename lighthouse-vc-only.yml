@@ -6,7 +6,7 @@
 # https://github.com/ethstaker/eth-docker/blob/main/lighthouse-vc-only.yml):
 # one small compose file per client/role, selected by listing it in
 # COMPOSE_FILE in .env (docker compose reads COMPOSE_FILE natively from
-# .env, no -f flags needed). See jocv: compose_files_for_role().
+# .env, no -f flags needed). See jocd: compose_files_for_role().
 #
 # Unlike eth-docker's version, this does not build Lighthouse from source,
 # does not add metrics/doppelganger/MEV-boost/exit-tooling — none of that

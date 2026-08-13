@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# jocv — CLI for running a JOC (Japan Open Chain) PoSA Validator Client on
+# jocd — CLI for running a JOC (Japan Open Chain) PoSA Validator Client on
 # infrastructure you control, as opposed to the parts done through the
-# BCCloud web UI. See README.md for the full picture, GETTING-STARTED.md
-# for a quick walkthrough.
+# BCCloud web UI. See README.md for the quickstart, CLAUDE.md for the
+# full architecture/security/self-review picture.
 #
 # Validator-only right now (guide Option 2) — this used to also support
 # self-hosting an Execution + Consensus Client (ROLE=el-cl/all, guide
@@ -35,14 +35,14 @@ set -euo pipefail
 # =============================================================================
 # 1. Paths and supported values
 # =============================================================================
-JOCV_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-DATA_DIR="$JOCV_ROOT/data"
+JOCD_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DATA_DIR="$JOCD_ROOT/data"
 KEYS_DIR="$DATA_DIR/validator_keys"
-NETWORKS_DIR="$JOCV_ROOT/networks"
-ENV_FILE="$JOCV_ROOT/.env"
-ENV_EXAMPLE="$JOCV_ROOT/.env.example"
+NETWORKS_DIR="$JOCD_ROOT/networks"
+ENV_FILE="$JOCD_ROOT/.env"
+ENV_EXAMPLE="$JOCD_ROOT/.env.example"
 
-# Keep these allow-lists as the single source of truth for what jocv
+# Keep these allow-lists as the single source of truth for what jocd
 # currently supports. Adding a new entry here is a deliberate, reviewed
 # decision — not something any command should infer on its own.
 SUPPORTED_NETWORKS=(mainnet testnet sandbox)
@@ -143,7 +143,7 @@ is_supported_role()      { _list_contains "${1:-}" "${SUPPORTED_ROLES[@]}"; }
 # One file per client/role (eth-docker convention — see e.g.
 # https://github.com/ethstaker/eth-docker/blob/main/lighthouse-vc-only.yml),
 # rather than one file with docker-compose 'profiles:' filtering. Only one
-# role exists right now (see jocv's header comment for why), but this
+# role exists right now (see jocd's header comment for why), but this
 # stays a function/single-source-of-truth rather than a hardcoded
 # constant so re-adding a role later is additive here, not a rewrite.
 compose_files_for_role() {
@@ -173,7 +173,7 @@ set_env_var() {
 
 # Loads .env into the current shell's environment (auto-export), so
 # commands can read NETWORK/ROLE/CL_CLIENT/etc. Assumes .env is trusted
-# content that jocv itself wrote — same trust model docker compose
+# content that jocd itself wrote — same trust model docker compose
 # already applies to .env.
 load_env() {
   [[ -f "$ENV_FILE" ]] || return 1
@@ -187,8 +187,8 @@ load_env() {
 # 3. Commands
 # =============================================================================
 
-# --- jocv install --------------------------------------------------------------
-# Install Docker (Engine + compose plugin), the only prerequisite jocv
+# --- jocd install --------------------------------------------------------------
+# Install Docker (Engine + compose plugin), the only prerequisite jocd
 # actually needs.
 #
 # Deliberately narrow compared to eth-docker's `ethd install`: this only
@@ -216,7 +216,7 @@ _install_run_steps() {
 }
 
 cmd_install() {
-  info "=== jocv install — Docker prerequisite check/install ==="
+  info "=== jocd install — Docker prerequisite check/install ==="
 
   if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1 && docker compose version >/dev/null 2>&1; then
     success "Docker is already installed and running, with the compose plugin. Nothing to do."
@@ -271,7 +271,7 @@ cmd_install() {
     info "Adding $USER to the 'docker' group (to run docker without sudo)..."
     sudo usermod -aG docker "$USER"
     warn "Group membership only takes effect in a NEW login session."
-    warn "Log out and back in (or run: newgrp docker) before using 'jocv'."
+    warn "Log out and back in (or run: newgrp docker) before using 'jocd'."
   else
     info "$USER is already in the 'docker' group."
   fi
@@ -288,7 +288,7 @@ cmd_install() {
   docker compose version || true
 }
 
-# --- jocv init -----------------------------------------------------------------
+# --- jocd init -----------------------------------------------------------------
 # Set up this node (guide Option 2, Recommended — the only role this CLI
 # supports): Step 2-1, 2-2, 2-6, 2-7, 2-8 — directories, consensus config,
 # password/mnemonic/keys/deposit data, import into Lighthouse, start the
@@ -302,7 +302,7 @@ cmd_install() {
 # Safe to re-run: steps that already have output on disk are skipped
 # rather than silently overwritten.
 cmd_init() {
-  info "=== jocv init — JOC PoSA Validator Client setup ==="
+  info "=== jocd init — JOC PoSA Validator Client setup ==="
 
   check_docker
 
@@ -322,7 +322,7 @@ cmd_init() {
   fi
   export NETWORK
 
-  # Only one ROLE exists right now (see jocv's header comment) — still
+  # Only one ROLE exists right now (see jocd's header comment) — still
   # validated against SUPPORTED_ROLES rather than hardcoded, so an old
   # .env with a since-removed ROLE value fails loudly instead of silently
   # doing the wrong thing.
@@ -347,7 +347,7 @@ cmd_init() {
   if [[ -d "$KEYS_DIR" ]] && [[ -n "$(ls -A "$KEYS_DIR" 2>/dev/null || true)" ]]; then
     warn "$KEYS_DIR already exists and is not empty."
     if ! confirm "Continue and reuse the existing directory (nothing will be deleted)?"; then
-      info "To start over instead: 'jocv destroy' (permanently deletes"
+      info "To start over instead: 'jocd destroy' (permanently deletes"
       info "keys/deposit data/.env — only if you're sure you don't need them)."
       die "Aborted by user. Nothing was changed."
     fi
@@ -371,7 +371,7 @@ Please do this manually:
   2. Download "config.yaml" and "deposit_contract_block.txt".
   3. Place both files in: $cl_dir/
      (or have your team commit them there — see networks/README.md)
-  4. Re-run: jocv init
+  4. Re-run: jocd init
 
 EOF
     die "Consensus config files not found for network '$NETWORK'."
@@ -387,7 +387,7 @@ EOF
   # header comment for why it's kept separate
   # (independent tweaking, most security-sensitive part of this project).
   # This block only collects the withdrawal address and invokes compose;
-  # jocv never touches the mnemonic itself.
+  # jocd never touches the mnemonic itself.
   info "Validator setup: withdrawal address"
   if [[ -n "${VALIDATOR_WITHDRAWAL_ADDRESS:-}" ]] && is_valid_eth_address "${VALIDATOR_WITHDRAWAL_ADDRESS:-}"; then
     info "Using VALIDATOR_WITHDRAWAL_ADDRESS from environment: $VALIDATOR_WITHDRAWAL_ADDRESS"
@@ -414,13 +414,13 @@ EOF
   # --chain=joc regardless of NETWORK, per the guide's Step 2-2 command.
   # NETWORK is already exported above, so staking-deposit-cli.yml's
   # ${NETWORK} volume interpolation (validator-import) resolves correctly.
-  docker compose -f "$JOCV_ROOT/staking-deposit-cli.yml" run --rm \
+  docker compose -f "$JOCD_ROOT/staking-deposit-cli.yml" run --rm \
     -e HOST_UID="$(id -u)" \
     -e HOST_GID="$(id -g)" \
     deposit-generate
 
   info "Step 2-6: importing the validator key into the Lighthouse Validator Client..."
-  docker compose -f "$JOCV_ROOT/staking-deposit-cli.yml" run --rm \
+  docker compose -f "$JOCD_ROOT/staking-deposit-cli.yml" run --rm \
     -e HOST_UID="$(id -u)" \
     -e HOST_GID="$(id -g)" \
     validator-import
@@ -440,14 +440,14 @@ EOF
 
   if ! grep -q '^BEACON_URL=http://beacon:5052$' "$ENV_FILE"; then
     warn "BEACON_URL is a safe local placeholder until you run:"
-    warn "  jocv validator config beacon http://<bccloud-node-ip>:3500"
+    warn "  jocd validator config beacon http://<bccloud-node-ip>:3500"
     warn "once Step 2-3~2-5 are done on BCCloud."
   fi
 
   # --- Start -------------------------------------------------------------------
   info "Starting the Validator Client via docker compose..."
-  ( cd "$JOCV_ROOT" && docker compose up -d )
-  success "Started. Check status with: jocv status"
+  ( cd "$JOCD_ROOT" && docker compose up -d )
+  success "Started. Check status with: jocd status"
 
   # --- Final summary -----------------------------------------------------------
   echo >&2
@@ -469,12 +469,12 @@ EOF
   echo "================================================================" >&2
 }
 
-# --- jocv validator config [<key> [<value>]] ----------------------------------------
+# --- jocd validator config [<key> [<value>]] ----------------------------------------
 # Single, extensible entry point for validator-scoped settings — no
 # argument: print every known key's current value. One key, no value:
 # print just that one. Key + value: validate, write to .env, offer to
 # apply. Doesn't touch keys — for first-time setup (including key
-# generation), use 'jocv init'.
+# generation), use 'jocd init'.
 #
 # Adding a new setting later (e.g. graffiti) means adding its name to
 # VALIDATOR_CONFIG_KEYS below plus one case arm each in
@@ -485,7 +485,7 @@ EOF
 VALIDATOR_CONFIG_KEYS=(address beacon)
 
 cmd_validator_config() {
-  [[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found. Run 'jocv init' first."
+  [[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found. Run 'jocd init' first."
   load_env
 
   local key="${1:-}" value="${2:-}"
@@ -510,10 +510,10 @@ cmd_validator_config() {
 
   check_docker
   if confirm "Apply now via 'docker compose up -d'?"; then
-    ( cd "$JOCV_ROOT" && docker compose up -d )
-    success "Applied. Check with: jocv status"
+    ( cd "$JOCD_ROOT" && docker compose up -d )
+    success "Applied. Check with: jocd status"
   else
-    info "Not applied yet — run 'jocv up' when ready."
+    info "Not applied yet — run 'jocd up' when ready."
   fi
 }
 
@@ -546,21 +546,21 @@ _validator_config_set() {
   esac
 }
 
-# --- jocv validator deposit-data -----------------------------------------------------
-# Reprint the deposit_data-*.json path + contents generated by 'jocv init'
+# --- jocd validator deposit-data -----------------------------------------------------
+# Reprint the deposit_data-*.json path + contents generated by 'jocd init'
 # (guide Step 3-1) — for whenever you need it again after the one-time
 # printout at init time (e.g. lost terminal scrollback). Public data only
 # (pubkey/signature/withdrawal credentials) — never touches the mnemonic
 # or any secret file.
 cmd_validator_deposit_data() {
-  [[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found. Run 'jocv init' first."
+  [[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found. Run 'jocd init' first."
   load_env
 
   shopt -s nullglob
   local deposit_files=("$KEYS_DIR"/deposit_data-*.json)
   shopt -u nullglob
   [[ ${#deposit_files[@]} -gt 0 ]] \
-    || die "No deposit_data-*.json found in $KEYS_DIR. Run 'jocv init' first."
+    || die "No deposit_data-*.json found in $KEYS_DIR. Run 'jocd init' first."
 
   info "Deposit data file (guide Step 3-1 — submit this yourself if you haven't already):"
   echo "  ${deposit_files[0]}" >&2
@@ -572,7 +572,7 @@ cmd_validator_deposit_data() {
   echo "----------------------------------------------------------------" >&2
 }
 
-# --- jocv status -------------------------------------------------------------------
+# --- jocd status -------------------------------------------------------------------
 # Check the validator container's health, per guide Step 3-2.
 cmd_status() {
   check_docker
@@ -610,27 +610,27 @@ cmd_status() {
   [[ "$overall_ok" == true ]] || return 1
 }
 
-# --- jocv upgrade ----------------------------------------------------------------------
+# --- jocd upgrade ----------------------------------------------------------------------
 # Update this CLI itself (this file, the per-client *.yml compose files,
 # and any networks/ files your team commits — including
 # networks/<NETWORK>/cl/config.yaml, e.g. for a new hard fork phase) via
 # `git pull`. Loosely modeled on eth-docker's `ethd update`, but much
 # simpler: no OS package management, no .env migration, no automatic
 # container restart or config apply — applying a pulled-in config.yaml
-# change is a deliberate follow-up step ('jocv restart'), not automatic.
+# change is a deliberate follow-up step ('jocd restart'), not automatic.
 # Named 'upgrade' rather than 'update' to avoid the old, confusingly
 # similar 'update'/'update-config' pair this project used to have.
 cmd_upgrade() {
-  [[ -d "$JOCV_ROOT/.git" ]] \
-    || die "$JOCV_ROOT is not a git checkout. Clone this repo with 'git clone' to use 'jocv upgrade'."
-  command -v git >/dev/null 2>&1 || die "git is required for 'jocv upgrade'."
+  [[ -d "$JOCD_ROOT/.git" ]] \
+    || die "$JOCD_ROOT is not a git checkout. Clone this repo with 'git clone' to use 'jocd upgrade'."
+  command -v git >/dev/null 2>&1 || die "git is required for 'jocd upgrade'."
 
-  cd "$JOCV_ROOT"
+  cd "$JOCD_ROOT"
 
   if [[ -n "$(git status --porcelain)" ]]; then
     warn "This checkout has local changes (git status is not clean):"
     git status --short >&2
-    die "Commit, stash, or discard local changes before running 'jocv upgrade'."
+    die "Commit, stash, or discard local changes before running 'jocd upgrade'."
   fi
 
   local branch
@@ -666,35 +666,35 @@ cmd_upgrade() {
   if [[ -n "$compose_changed" ]]; then
     warn "Compose file(s) changed:"
     echo "$compose_changed" | sed 's/^/  /' >&2
-    warn "Review the diff, then run 'jocv up' to apply."
+    warn "Review the diff, then run 'jocd up' to apply."
   fi
   if [[ -n "$cl_config_changed" ]]; then
     warn "Consensus config changed (likely a new hard fork phase):"
     echo "$cl_config_changed" | sed 's/^/  /' >&2
     warn "Confirm your team verified this against the official JBF/admin"
-    warn "source, then run 'jocv restart' so the validator container picks"
+    warn "source, then run 'jocd restart' so the validator container picks"
     warn "it up (bind-mounted, no rebuild needed)."
   fi
 }
 
-# --- jocv up -------------------------------------------------------------------------
+# --- jocd up -------------------------------------------------------------------------
 # (Re)start the validator service, per the current .env (including which
 # compose file COMPOSE_FILE points at) — also picks up any compose
-# file/.env change (see 'jocv restart' for the difference).
+# file/.env change (see 'jocd restart' for the difference).
 cmd_up() {
   check_docker
-  [[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found. Run 'jocv init' first."
+  [[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found. Run 'jocd init' first."
   load_env
 
-  ( cd "$JOCV_ROOT" && docker compose up -d )
-  success "Up (role: ${ROLE:-<unset>}, compose file(s): ${COMPOSE_FILE:-<unset>}). Check with: jocv status"
+  ( cd "$JOCD_ROOT" && docker compose up -d )
+  success "Up (role: ${ROLE:-<unset>}, compose file(s): ${COMPOSE_FILE:-<unset>}). Check with: jocd status"
 }
 
-# --- jocv down -----------------------------------------------------------------------
+# --- jocd down -----------------------------------------------------------------------
 # Stop and remove this node's container(s) (--remove-orphans in case ROLE
-# or COMPOSE_FILE changed since the last 'jocv up'). Reversible: data/ and
-# .env are left untouched — bring the node back with 'jocv up'. For
-# permanently deleting keys/deposit data/.env instead, see 'jocv destroy'.
+# or COMPOSE_FILE changed since the last 'jocd up'). Reversible: data/ and
+# .env are left untouched — bring the node back with 'jocd up'. For
+# permanently deleting keys/deposit data/.env instead, see 'jocd destroy'.
 cmd_down() {
   check_docker
   [[ -f "$ENV_FILE" ]] && load_env || true
@@ -704,45 +704,45 @@ cmd_down() {
   fi
   confirm "Stop the node now?" || die "Aborted."
 
-  ( cd "$JOCV_ROOT" && docker compose down --remove-orphans )
-  success "Stopped. Start again with: jocv up"
+  ( cd "$JOCD_ROOT" && docker compose down --remove-orphans )
+  success "Stopped. Start again with: jocd up"
 }
 
-# --- jocv restart --------------------------------------------------------------------
+# --- jocd restart --------------------------------------------------------------------
 # `docker compose restart validator`. Restarts the existing container in
 # place — re-reads any bind-mounted file that changed on disk (e.g.
 # networks/<NETWORK>/cl/config.yaml after a hard fork config update
-# pulled in via 'jocv upgrade' — guide Step 4-1's "sudo docker restart
+# pulled in via 'jocd upgrade' — guide Step 4-1's "sudo docker restart
 # validator"). Does NOT recreate the container: a changed compose file or
-# .env value needs 'jocv up' instead, not this (see README.md).
+# .env value needs 'jocd up' instead, not this (see README.md).
 cmd_restart() {
   check_docker
-  [[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found. Run 'jocv init' first."
+  [[ -f "$ENV_FILE" ]] || die "$ENV_FILE not found. Run 'jocd init' first."
   load_env
 
   info "Restarting: validator..."
-  ( cd "$JOCV_ROOT" && docker compose restart validator )
-  success "Done. Check with: jocv status"
+  ( cd "$JOCD_ROOT" && docker compose restart validator )
+  success "Done. Check with: jocd status"
 
   warn "Per the guide: after 5-10 minutes, if 'Not attesting' keeps appearing"
   warn "for more than 15-20 minutes, the validator is not operating properly."
 }
 
-# --- jocv destroy --------------------------------------------------------------------
+# --- jocd destroy --------------------------------------------------------------------
 # Stop this node's containers AND permanently delete its data (keys,
 # deposit data, the Validator Client's own datadir) and .env. NOT
 # reversible.
 #
-# Deliberately a separate command from 'jocv down' rather than a
+# Deliberately a separate command from 'jocd down' rather than a
 # '--data'/'--all' flag on it — no accidentally-omitted flag can turn a
 # routine stop into an irreversible wipe. For just stopping containers
-# (reversible), use 'jocv down' instead.
+# (reversible), use 'jocd down' instead.
 cmd_destroy() {
   check_docker
 
   echo >&2
   shout "=================================================================="
-  shout " 'jocv destroy' will stop this node's containers AND PERMANENTLY"
+  shout " 'jocd destroy' will stop this node's containers AND PERMANENTLY"
   shout " DELETE:"
   [[ -d "$KEYS_DIR" ]] && shout "   - $KEYS_DIR"
   shout "     (mnemonic-derived keystore, deposit_data-*.json, password.txt)"
@@ -763,20 +763,20 @@ cmd_destroy() {
     || die "Confirmation text did not match. Aborted. Nothing was deleted."
 
   info "Stopping and removing containers for this node..."
-  ( cd "$JOCV_ROOT" && docker compose down --remove-orphans )
+  ( cd "$JOCD_ROOT" && docker compose down --remove-orphans )
 
   rm -rf "$DATA_DIR" "$ENV_FILE"
-  success "Removed $DATA_DIR and $ENV_FILE. Run 'jocv init' to start fresh."
+  success "Removed $DATA_DIR and $ENV_FILE. Run 'jocd init' to start fresh."
 }
 
-# --- jocv logs ---------------------------------------------------------------------
+# --- jocd logs ---------------------------------------------------------------------
 # Follow the validator container's logs. For a one-shot health check
-# instead, use 'jocv status'.
+# instead, use 'jocd status'.
 cmd_logs() {
   check_docker
   [[ -f "$ENV_FILE" ]] && load_env || true
 
-  ( cd "$JOCV_ROOT" && docker compose logs -f --tail 100 validator )
+  ( cd "$JOCD_ROOT" && docker compose logs -f --tail 100 validator )
 }
 
 # =============================================================================
@@ -784,39 +784,39 @@ cmd_logs() {
 # =============================================================================
 usage() {
   cat <<'EOF'
-jocv — JOC Validator Client CLI
+jocd — JOC Validator Client CLI
 
 Usage:
-  jocv install                     Install Docker (Engine + compose plugin) if missing
-  jocv init                        Set up this node: prompts for NETWORK
+  jocd install                     Install Docker (Engine + compose plugin) if missing
+  jocd init                        Set up this node: prompts for NETWORK
                                     (mainnet|testnet|sandbox), then runs
                                     the guide's Step 2
 
-  jocv validator config [<key> [<value>]]
+  jocd validator config [<key> [<value>]]
                                     View all validator settings, one key, or
                                     set + apply one (keys: address, beacon —
-                                    'jocv validator config' with no args
+                                    'jocd validator config' with no args
                                     lists all of them)
-  jocv validator deposit-data      Reprint the deposit_data-*.json path +
-                                    contents from 'jocv init' (Step 3-1)
+  jocd validator deposit-data      Reprint the deposit_data-*.json path +
+                                    contents from 'jocd init' (Step 3-1)
 
-  jocv status                      Check the validator container (Step 3-2)
-  jocv up                          Start/apply the validator service (also
+  jocd status                      Check the validator container (Step 3-2)
+  jocd up                          Start/apply the validator service (also
                                     picks up compose file/.env changes)
-  jocv down                        Stop it
-  jocv restart                     docker compose restart — for a hard fork
+  jocd down                        Stop it
+  jocd restart                     docker compose restart — for a hard fork
                                     config.yaml update (Step 4-1) or similar;
                                     does NOT pick up compose file/.env changes
-  jocv logs                        Follow the validator container's logs
-  jocv destroy                     Stop containers AND PERMANENTLY delete
+  jocd logs                        Follow the validator container's logs
+  jocd destroy                     Stop containers AND PERMANENTLY delete
                                     keys/deposit data/.env (NOT reversible —
-                                    separate from 'jocv down' on purpose)
+                                    separate from 'jocd down' on purpose)
 
-  jocv upgrade                     Update this CLI itself via 'git pull' (code +
+  jocd upgrade                     Update this CLI itself via 'git pull' (code +
                                     any networks/ files your team commits, e.g.
                                     a new networks/<NETWORK>/cl/config.yaml)
 
-Run 'jocv <command>' with no further arguments for command-specific usage.
+Run 'jocd <command>' with no further arguments for command-specific usage.
 See README.md for the full walkthrough, prerequisites, and links to the
 manual BCCloud steps this CLI does NOT automate.
 EOF
@@ -836,7 +836,7 @@ main() {
         config)       cmd_validator_config "$@" ;;
         deposit-data) cmd_validator_deposit_data "$@" ;;
         *)
-          echo "Usage: jocv validator <config [<key> [<value>]]|deposit-data>" >&2
+          echo "Usage: jocd validator <config [<key> [<value>]]|deposit-data>" >&2
           exit 1
           ;;
       esac
