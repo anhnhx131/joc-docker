@@ -12,6 +12,10 @@ English: [README.md](README.md)
 
 - 自分で管理できる Linux/macOS マシン（EC2、VPS、オンプレなど、常時起動できる
   もの）。
+- `git` — 大抵のイメージには最初から入っています。下の `git clone` で
+  "command not found" と出た場合:
+  - Ubuntu（EC2 の Ubuntu、GCP のデフォルトイメージ含む）: `sudo apt-get update -y && sudo apt-get install -y git`
+  - Amazon Linux / RHEL 系（EC2 の Amazon Linux 含む）: `sudo dnf install -y git`（古い Amazon Linux 2 の場合: `sudo yum install -y git`）
 - [Docker](https://docs.docker.com/engine/install/) — 未インストールの場合は
   `jocd install` で導入できます。
 - ガイドの Step 1-1（受取用 withdrawal address の取得）・Step 1-2（JOC PoSA

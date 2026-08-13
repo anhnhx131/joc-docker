@@ -13,6 +13,10 @@ guide-verbatim vs. inferred.
 
 - A Linux/macOS machine you control (EC2, VPS, on-prem — anything that
   stays online).
+- `git` — most images already have it; if `git clone` below says "command
+  not found":
+  - Ubuntu (incl. EC2 Ubuntu, GCP's default image): `sudo apt-get update -y && sudo apt-get install -y git`
+  - Amazon Linux / RHEL-family (incl. EC2 Amazon Linux): `sudo dnf install -y git` (older Amazon Linux 2: `sudo yum install -y git`)
 - [Docker](https://docs.docker.com/engine/install/) — run `jocd install`
   if you don't have it yet.
 - Guide Step 1-1 (receiver withdrawal address) and Step 1-2 (joined the
